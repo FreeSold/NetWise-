@@ -11,6 +11,13 @@
     "ios": {
       "supportsTablet": true
     },
-    "android": {}
+    "android": {
+      "package": "com.wanga.netwise",
+      "versionCode": 1
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-secure-store"
+    ]
   }
 }

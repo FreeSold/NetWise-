@@ -24,5 +24,6 @@ export interface ParsedAsset {
 export interface ParseResult {
   screenType: ScreenType | "unknown";
   assets: ParsedAsset[];
+  reportedTotal?: number;
   warnings: string[];
 }
