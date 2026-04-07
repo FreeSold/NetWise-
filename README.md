@@ -190,6 +190,49 @@ npm run typecheck
 - `Failed to resolve the Android SDK path`：说明 SDK 没装好或环境变量缺失，按上面的 `ANDROID_HOME` 配置并重开终端
 - 按 `a` 无反应：通常是没有启动模拟器，或 `adb devices` 没检测到设备
 
+## 打 APK 到手机安装
+
+如果你只是想打一个安卓安装包自己手机使用，按下面做：
+
+### 1) 安装 EAS CLI
+
+```bash
+npm install -g eas-cli
+```
+
+### 2) 登录 Expo
+
+```bash
+eas login
+```
+
+### 3) 打测试 APK
+
+本项目已经配置好 `preview` 打包参数，直接执行：
+
+```bash
+eas build -p android --profile preview
+```
+
+这一步会在 Expo 云端打包，完成后终端会返回一个下载链接。
+
+### 4) 下载并安装到手机
+
+- 打开打包完成后的链接
+- 下载 `.apk` 文件到安卓手机
+- 手机上允许“安装未知来源应用”
+- 点击 APK 安装
+
+### 5) 打正式上架包（可选）
+
+如果以后要上架应用市场，使用：
+
+```bash
+eas build -p android --profile production
+```
+
+这会生成更适合上架的 `aab` 包。
+
 ## 当前结构
 
 - `App.tsx`：MVP 页面（文本输入、解析结果、汇总）
