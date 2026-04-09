@@ -146,9 +146,10 @@ adb push "D:\your-image-path\asset.png" /sdcard/Pictures/
 - `src/ocr/ocrSpace.ts`
 
 注意：
-- 当前默认用的是 OCR.Space 的测试 key（`helloworld`），适合开发验证
-- 正式使用建议替换成你自己的 OCR 服务 key
-- 截图涉及隐私数据，建议仅在你信任的网络和服务环境下使用
+- 当前默认使用的是 **本地 OCR（Google ML Kit Text Recognition）**
+- OCR 在设备本地完成，不依赖外部 OCR 服务
+- 首次接入本地 OCR 后，需要重新安装调试包或重新打 APK，热更新无法把原生模块带进现有 App
+- 截图涉及隐私数据，但当前 OCR 不再上传到外部识别服务
 
 ## 调试指南（重点）
 
@@ -166,8 +167,9 @@ adb push "D:\your-image-path\asset.png" /sdcard/Pictures/
 
 建议做法：
 1. 在 App 里导入测试截图
-2. 查看启动终端里的 OCR 原文日志
-3. 在 `parseOcrText` 内打 `console.log` 观察：
+2. 在 App 的“解析结果”区域展开“`查看 OCR 原文`”
+3. 如需更细日志，再查看启动终端里的 OCR 原文日志
+4. 在 `parseOcrText` 内打 `console.log` 观察：
    - 识别到的 `screenType`
    - 每条规则是否命中
    - 金额是否被 `parseMoney` 正确提取

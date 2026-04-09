@@ -20,24 +20,51 @@ function includesAny(text: string, words: string[]): boolean {
   return words.some((word) => text.includes(word));
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function pickClosestInlineAmount(line: string, label: string): number | null {
+  const inlineMatch = line.match(new RegExp(`${escapeRegExp(label)}[^\\d-]{0,8}(-?\\d[\\d,]*(?:\\.\\d{1,2})?)`));
+  if (!inlineMatch?.[1]) {
+    return null;
+  }
+  return parseMoney(inlineMatch[1]);
+}
+
+function isMostlyAmountLine(line: string): boolean {
+  const normalized = line.replace(/[¥$,\s]/g, "");
+  return /^[-+]?\d+(?:\.\d{1,2})?(?:[%＋+]\d+(?:\.\d{1,2})?)?$/.test(normalized);
+}
+
 function pickAmountByLabel(
   lines: string[],
-  label: string,
+  label: string | string[],
   options?: {
     excludeKeywords?: string[];
     allowNegative?: boolean;
     sameLineOnly?: boolean;
+    lookAheadLines?: number;
   }
 ): number | null {
   const excludeKeywords = options?.excludeKeywords ?? [];
+  const labels = Array.isArray(label) ? label : [label];
+  const lookAheadLines = options?.sameLineOnly ? 0 : Math.max(1, options?.lookAheadLines ?? 1);
   const candidates: number[] = [];
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    if (!line.includes(label)) {
+    const matchedLabel = labels.find((item) => line.includes(item));
+    if (!matchedLabel) {
       continue;
     }
     if (includesAny(line, excludeKeywords)) {
+      continue;
+    }
+
+    const inlineAmount = pickClosestInlineAmount(line, matchedLabel);
+    if (inlineAmount !== null) {
+      candidates.push(inlineAmount);
       continue;
     }
 
@@ -49,14 +76,22 @@ function pickAmountByLabel(
       }
     }
 
-    if (!sameLineNumbers.length && !options?.sameLineOnly && i + 1 < lines.length) {
-      const nextLine = lines[i + 1];
-      if (!includesAny(nextLine, excludeKeywords)) {
+    if (!sameLineNumbers.length && lookAheadLines > 0) {
+      for (let step = 1; step <= lookAheadLines && i + step < lines.length; step += 1) {
+        const nextLine = lines[i + step];
+        if (includesAny(nextLine, excludeKeywords)) {
+          continue;
+        }
+        if (!isMostlyAmountLine(nextLine)) {
+          continue;
+        }
         const nextLineNumbers = nextLine.match(NUMBER_RE) ?? [];
-        for (const rawNum of nextLineNumbers) {
-          const value = parseMoney(rawNum);
+        const nextNumber = nextLineNumbers[0];
+        if (nextNumber) {
+          const value = parseMoney(nextNumber);
           if (value !== null) {
             candidates.push(value);
+            break;
           }
         }
       }
@@ -75,10 +110,12 @@ function parseByLineRules(
   source: ScreenType,
   rules: Array<{
     name: string;
-    label: string;
+    label: string | string[];
     assetClass: ParsedAsset["assetClass"];
     excludeKeywords?: string[];
     allowNegative?: boolean;
+    sameLineOnly?: boolean;
+    lookAheadLines?: number;
   }>
 ): ParsedAsset[] {
   const lines = toLines(raw);
@@ -87,7 +124,8 @@ function parseByLineRules(
       const amount = pickAmountByLabel(lines, rule.label, {
         excludeKeywords: rule.excludeKeywords,
         allowNegative: rule.allowNegative,
-        sameLineOnly: true
+        sameLineOnly: rule.sameLineOnly ?? true,
+        lookAheadLines: rule.lookAheadLines
       });
       if (amount === null) {
         return null;
@@ -112,14 +150,16 @@ const templates: Template[] = [
         { name: "招行活钱", label: "活钱", assetClass: "cash", excludeKeywords: ["收益"] },
         { name: "招行活期余额", label: "活期", assetClass: "cash", excludeKeywords: ["收益"] },
         { name: "招行存款", label: "存款", assetClass: "cash", excludeKeywords: ["收益"] },
+        { name: "招行个人养老金", label: ["专项", "专項"], assetClass: "insurance", excludeKeywords: ["收益"] },
         { name: "招行理财持仓", label: "理财", assetClass: "wealth_management", excludeKeywords: ["收益", "昨日"] },
         { name: "招行基金持仓", label: "基金", assetClass: "fund", excludeKeywords: ["收益", "累计"] },
-        { name: "招行黄金持仓", label: "黄金", assetClass: "stock", excludeKeywords: ["收益"] },
         {
-          name: "招行保险持仓",
-          label: "保险",
-          assetClass: "insurance",
-          excludeKeywords: ["收益", "配齐", "特药保", "保障", "广告", "万"]
+          name: "招行黄金持仓",
+          label: ["黄金", "黃金", "黃全", "贵金属"],
+          assetClass: "stock",
+          excludeKeywords: ["收益"],
+          sameLineOnly: false,
+          lookAheadLines: 2
         }
       ])
   },
@@ -133,12 +173,17 @@ const templates: Template[] = [
   },
   {
     type: "alipay_wealth",
-    keywords: ["总资产", "余额宝", "理财"],
+    keywords: ["支付宝", "余额宝", "余颧宝", "借呗", "花呗", "储蓄1养老", "家庭保障"],
     parse: (raw) =>
       parseByLineRules(raw, "alipay_wealth", [
-        { name: "支付宝余额宝", label: "余额宝", assetClass: "cash", excludeKeywords: ["收益"] },
+        { name: "支付宝余额宝", label: ["余额宝", "余颧宝", "余額宝"], assetClass: "cash", excludeKeywords: ["收益"] },
         { name: "支付宝基金持仓", label: "基金", assetClass: "fund", excludeKeywords: ["收益", "自选"] },
-        { name: "支付宝养老储蓄", label: "储蓄", assetClass: "insurance", excludeKeywords: ["收益"] },
+        {
+          name: "支付宝养老储蓄",
+          label: ["储蓄|养老", "储蓄1养老", "储蓄I养老", "储蓄养老", "养老"],
+          assetClass: "insurance",
+          excludeKeywords: ["收益"]
+        },
         { name: "支付宝理财持仓", label: "理财", assetClass: "wealth_management", excludeKeywords: ["收益", "好礼"] }
       ])
   },
@@ -162,6 +207,15 @@ const templates: Template[] = [
 ];
 
 function detectScreenType(text: string): ScreenType | "unknown" {
+  if (includesAny(text, ["余额宝", "余颧宝", "借呗", "花呗", "储蓄1养老", "家庭保障", "余利宝"])) {
+    return "alipay_wealth";
+  }
+  if (includesAny(text, ["活钱", "朝朝宝", "朝朝盈", "专项", "招商银行"])) {
+    return "cmb_property";
+  }
+  if (includesAny(text, ["零钱通", "微信零钱", "微信钱包", "服务"])) {
+    return "wechat_wallet";
+  }
   const scored = templates
     .map((tpl) => ({
       type: tpl.type,

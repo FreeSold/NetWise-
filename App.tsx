@@ -9,7 +9,7 @@ import Slider from "@react-native-community/slider";
 import { Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
 import type { AssetClass, ParsedAsset, ParseResult } from "./src/domain/types";
 import { TrendLineChart } from "./src/components/TrendLineChart";
-import { recognizeTextFromBase64, recognizeTextFromImage } from "./src/ocr/ocrSpace";
+import { recognizeTextFromImage } from "./src/ocr/ocrSpace";
 import { parseOcrText } from "./src/parsers/templates";
 import {
   authenticateWithBiometrics,
@@ -64,16 +64,27 @@ const PLATFORM_TREND_LABEL: Record<PlatformTrendFilter, string> = {
   cmb: "招商银行趋势",
   wechat: "微信趋势"
 };
+const SCREEN_TYPE_LABEL: Record<ParseResult["screenType"], string> = {
+  cmb_property: "招商银行财产页",
+  cmb_wealth: "招商银行理财页",
+  alipay_wealth: "支付宝理财页",
+  alipay_fund: "支付宝基金页",
+  wechat_wallet: "微信钱包页",
+  unknown: "未识别页面"
+};
 
 type EditableAssetItem = ParsedAsset & {
   imageUri: string;
   localId: string;
+  amountInput: string;
+  amountError: string | null;
 };
 
 type ImportedImageMeta = {
   uri: string;
   hash: string;
   parseResult: ParseResult;
+  rawOcrText: string;
 };
 
 function inferMimeFromUri(uri: string): "image/png" | "image/jpeg" | "image/webp" {
@@ -130,6 +141,7 @@ export default function App() {
   const [cardOpacityPercent, setCardOpacityPercent] = useState(86);
   const [parsed, setParsed] = useState<ParseResult>(EMPTY_PARSE_RESULT);
   const [editableAssets, setEditableAssets] = useState<EditableAssetItem[]>([]);
+  const [expandedOcrUris, setExpandedOcrUris] = useState<string[]>([]);
 
   const cashAmount = dailySummary.byClass.cash;
   const fundAmount = dailySummary.byClass.fund;
@@ -181,13 +193,33 @@ export default function App() {
     void loadTrend();
   }, [dbReady, trendFilter]);
 
-  async function computeImageHash(uri: string, base64?: string | null): Promise<string> {
-    const base64Payload =
-      base64 ??
-      (await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64
-      }));
+  async function computeImageHash(uri: string): Promise<string> {
+    const base64Payload = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64
+    });
     return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, base64Payload);
+  }
+
+  function inferFileExtension(uri: string, fallback = "jpg"): string {
+    const cleanUri = uri.split("?")[0] ?? uri;
+    const match = cleanUri.match(/\.([a-zA-Z0-9]+)$/);
+    return match?.[1]?.toLowerCase() || fallback;
+  }
+
+  async function ensureLocalImportUri(sourceUri: string, preferredName?: string | null): Promise<string> {
+    const ext = inferFileExtension(preferredName ?? sourceUri);
+    const targetUri = `${FileSystem.cacheDirectory}netwise-import-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    if (sourceUri.startsWith("file://")) {
+      await FileSystem.copyAsync({ from: sourceUri, to: targetUri });
+      return targetUri;
+    }
+    const base64Payload = await FileSystem.readAsStringAsync(sourceUri, {
+      encoding: FileSystem.EncodingType.Base64
+    });
+    await FileSystem.writeAsStringAsync(targetUri, base64Payload, {
+      encoding: FileSystem.EncodingType.Base64
+    });
+    return targetUri;
   }
 
   function resetWorkingImport() {
@@ -195,6 +227,7 @@ export default function App() {
     setImportedImageMetas([]);
     setEditableAssets([]);
     setParsed(EMPTY_PARSE_RESULT);
+    setExpandedOcrUris([]);
     setPreviewIndex(0);
     setPreviewModalVisible(false);
   }
@@ -214,20 +247,71 @@ export default function App() {
     });
   }
 
-  function updateAssetName(index: number, name: string) {
-    setEditableAssets((prev) => prev.map((a, i) => (i === index ? { ...a, name } : a)));
+  function updateAssetName(localId: string, name: string) {
+    setEditableAssets((prev) => prev.map((a) => (a.localId === localId ? { ...a, name } : a)));
   }
 
-  function updateAssetAmount(index: number, amountRaw: string) {
-    const amount = Number(amountRaw.replace(/,/g, ""));
-    if (!Number.isFinite(amount)) {
-      return;
+  function getAmountValidationMessage(amountInput: string): string | null {
+    const normalized = amountInput.replace(/,/g, "").trim();
+    if (!normalized) {
+      return "请输入金额";
     }
-    setEditableAssets((prev) => prev.map((a, i) => (i === index ? { ...a, amount } : a)));
+    if (!/^-?\d*(\.\d*)?$/.test(normalized) || normalized === "." || normalized === "-" || normalized === "-.") {
+      return "金额格式不正确";
+    }
+    const amount = Number(normalized);
+    if (!Number.isFinite(amount)) {
+      return "金额格式不正确";
+    }
+    return null;
   }
 
-  function updateAssetClass(index: number, assetClass: AssetClass) {
-    setEditableAssets((prev) => prev.map((a, i) => (i === index ? { ...a, assetClass } : a)));
+  function updateAssetAmount(localId: string, amountRaw: string) {
+    setEditableAssets((prev) =>
+      prev.map((a) => {
+        if (a.localId !== localId) {
+          return a;
+        }
+        const normalized = amountRaw.replace(/,/g, "").trim();
+        const amount = Number(normalized);
+        return {
+          ...a,
+          amountInput: amountRaw,
+          amount: normalized && Number.isFinite(amount) ? amount : a.amount,
+          amountError: null
+        };
+      })
+    );
+  }
+
+  function validateAssetAmount(localId: string): boolean {
+    let isValid = true;
+    setEditableAssets((prev) =>
+      prev.map((a) => {
+        if (a.localId !== localId) {
+          return a;
+        }
+        const amountError = getAmountValidationMessage(a.amountInput);
+        if (!amountError) {
+          const normalized = a.amountInput.replace(/,/g, "").trim();
+          return {
+            ...a,
+            amount: Number(normalized),
+            amountError: null
+          };
+        }
+        isValid = false;
+        return {
+          ...a,
+          amountError
+        };
+      })
+    );
+    return isValid;
+  }
+
+  function updateAssetClass(localId: string, assetClass: AssetClass) {
+    setEditableAssets((prev) => prev.map((a) => (a.localId === localId ? { ...a, assetClass } : a)));
   }
 
   function movePlatformModuleToVisible(platform: PlatformTrendFilter) {
@@ -242,8 +326,23 @@ export default function App() {
     setParsed(nextMetas.length ? nextMetas[nextMetas.length - 1].parseResult : EMPTY_PARSE_RESULT);
   }
 
+  const groupedEditableAssets = selectedImageUris.map((uri, index) => {
+    const meta = importedImageMetas.find((item) => item.uri === uri);
+    const assets = editableAssets.filter((asset) => asset.imageUri === uri);
+    return {
+      uri,
+      index,
+      meta,
+      assets,
+      total: assets.reduce((sum, asset) => sum + asset.amount, 0)
+    };
+  });
+
   function formatOcrError(error: unknown): string {
     const rawMessage = error instanceof Error ? error.message : "OCR 识别失败";
+    if (rawMessage.includes("doesn't seem to be linked")) {
+      return "本地 OCR 模块尚未编进当前 App，请重新安装调试包或重新打 APK。";
+    }
     if (rawMessage.includes("Network request failed")) {
       return "OCR 服务连接失败，请检查当前网络，或稍后再试。";
     }
@@ -256,27 +355,31 @@ export default function App() {
     return rawMessage;
   }
 
-  async function runOcrForAsset(imageUri: string, base64?: string | null) {
+  function toggleOcrText(uri: string) {
+    setExpandedOcrUris((prev) => (prev.includes(uri) ? prev.filter((item) => item !== uri) : [...prev, uri]));
+  }
+
+  async function runOcrForAsset(imageUri: string) {
     setSelectedImageUris((prev) => (prev.includes(imageUri) ? prev : [...prev, imageUri].slice(0, 6)));
     setOcrLoading(true);
     setOcrError(null);
     setSaveNotice(null);
     try {
-      const imageHash = await computeImageHash(imageUri, base64);
-      const text = base64
-        ? await recognizeTextFromBase64(base64, inferMimeFromUri(imageUri))
-        : await recognizeTextFromImage(imageUri);
+      const imageHash = await computeImageHash(imageUri);
+      const text = await recognizeTextFromImage(imageUri);
       console.log("[OCR_FULL_TEXT_BEGIN]\n" + text + "\n[OCR_FULL_TEXT_END]");
       const parsedResult = parseOcrText(text);
       const nextAssetItems = parsedResult.assets.map((asset, index) => ({
         ...asset,
         imageUri,
-        localId: `${imageHash}-${index}-${Date.now()}`
+        localId: `${imageHash}-${index}-${Date.now()}`,
+        amountInput: asset.amount.toFixed(2),
+        amountError: null
       }));
       setImportedImageMetas((prev) => {
         const nextMetas = prev.some((item) => item.uri === imageUri)
-          ? prev.map((item) => (item.uri === imageUri ? { uri: imageUri, hash: imageHash, parseResult: parsedResult } : item))
-          : [...prev, { uri: imageUri, hash: imageHash, parseResult: parsedResult }];
+          ? prev.map((item) => (item.uri === imageUri ? { uri: imageUri, hash: imageHash, parseResult: parsedResult, rawOcrText: text } : item))
+          : [...prev, { uri: imageUri, hash: imageHash, parseResult: parsedResult, rawOcrText: text }];
         syncParsedFromMetas(nextMetas);
         return nextMetas;
       });
@@ -308,7 +411,6 @@ export default function App() {
       allowsMultipleSelection: true,
       selectionLimit: remainSlots,
       allowsEditing: false,
-      base64: true,
       quality: 1
     });
     if (picked.canceled || !picked.assets.length) {
@@ -316,7 +418,8 @@ export default function App() {
     }
 
     for (const asset of picked.assets.slice(0, remainSlots)) {
-      await runOcrForAsset(asset.uri, asset.base64);
+      const localUri = await ensureLocalImportUri(asset.uri, asset.fileName ?? null);
+      await runOcrForAsset(localUri);
     }
   }
 
@@ -336,7 +439,8 @@ export default function App() {
       return;
     }
     for (const asset of picked.assets.slice(0, remainSlots)) {
-      await runOcrForAsset(asset.uri);
+      const localUri = await ensureLocalImportUri(asset.uri, asset.name ?? null);
+      await runOcrForAsset(localUri);
     }
   }
 
@@ -366,6 +470,7 @@ export default function App() {
     });
     setPreviewIndex(0);
     setPreviewModalVisible(false);
+    setExpandedOcrUris((prev) => prev.filter((item) => item !== imageUri));
     setOcrError(null);
     setSaveNotice(null);
   }
@@ -389,9 +494,33 @@ export default function App() {
     setSaveLoading(true);
     setSaveNotice("正在记录数据...");
     try {
+      const validationErrors: string[] = [];
+      setEditableAssets((prev) =>
+        prev.map((asset) => {
+          const amountError = getAmountValidationMessage(asset.amountInput);
+          if (amountError) {
+            validationErrors.push(`${asset.name}: ${amountError}`);
+            return { ...asset, amountError };
+          }
+          return {
+            ...asset,
+            amount: Number(asset.amountInput.replace(/,/g, "").trim()),
+            amountError: null
+          };
+        })
+      );
+      if (validationErrors.length) {
+        setSaveNotice(`记录失败：${validationErrors[0]}`);
+        setSaveLoading(false);
+        return;
+      }
+      const normalizedAssets = editableAssets.map(({ amountInput, amountError, ...asset }) => ({
+        ...asset,
+        amount: Number(amountInput.replace(/,/g, "").trim())
+      }));
       const result = await saveImportSnapshot(
         currentImageHashes,
-        editableAssets.map(({ imageUri, localId, ...asset }) => asset)
+        normalizedAssets.map(({ imageUri, localId, ...asset }) => asset)
       );
       setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
       await refreshTrendData(trendFilter);
@@ -869,44 +998,74 @@ export default function App() {
 
             <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
               <Text style={styles.cardTitle}>解析结果（可修改）</Text>
-              {parsed.screenType !== "unknown" ? <Text style={styles.line}>页面类型: {parsed.screenType}</Text> : null}
-              {editableAssets.map((asset, index) => (
-                <View style={styles.assetRow} key={asset.localId ?? `${asset.name}-${index}`}>
-                  <TextInput
-                    value={asset.name}
-                    onChangeText={(value) => updateAssetName(index, value)}
-                    style={styles.assetNameInput}
-                    placeholder="资产名称"
-                  />
-                  <TextInput
-                    value={asset.amount.toFixed(2)}
-                    onChangeText={(value) => updateAssetAmount(index, value)}
-                    style={styles.assetAmountInput}
-                    keyboardType="decimal-pad"
-                    placeholder="金额"
-                  />
-                  <View style={styles.classPickerWrap}>
-                    <View style={styles.classDisplayRow}>
-                      <Text style={styles.classLabelText}>{ASSET_CLASS_LABEL[asset.assetClass]}</Text>
-                      <Text style={styles.classArrowText}>▼</Text>
-                    </View>
-                    <Picker
-                      mode="dialog"
-                      selectedValue={asset.assetClass}
-                      onValueChange={(value) => updateAssetClass(index, value as AssetClass)}
-                      style={styles.classPickerOverlay}
-                    >
-                      {ASSET_CLASS_ORDER.map((assetClass) => (
-                        <Picker.Item key={assetClass} label={ASSET_CLASS_LABEL[assetClass]} value={assetClass} />
-                      ))}
-                    </Picker>
+              {groupedEditableAssets.map((group) => (
+                <View style={styles.parseGroup} key={group.uri}>
+                  <View style={styles.parseGroupHeader}>
+                    <Text style={styles.parseGroupTitle}>页面 {group.index + 1}</Text>
+                    <Text style={styles.parseGroupTotal}>当前页面总额：{group.total.toFixed(2)}</Text>
                   </View>
+                  <Text style={styles.line}>页面类型：{SCREEN_TYPE_LABEL[group.meta?.parseResult.screenType ?? "unknown"]}</Text>
+                  {group.assets.map((asset) => (
+                    <View style={styles.assetRow} key={asset.localId}>
+                      <TextInput
+                        value={asset.name}
+                        onChangeText={(value) => updateAssetName(asset.localId, value)}
+                        style={styles.assetNameInput}
+                        placeholder="资产名称"
+                      />
+                      <View style={styles.assetAmountWrap}>
+                        <TextInput
+                          value={asset.amountInput}
+                          onChangeText={(value) => updateAssetAmount(asset.localId, value)}
+                          onBlur={() => validateAssetAmount(asset.localId)}
+                          style={styles.assetAmountInput}
+                          autoCorrect={false}
+                          autoCapitalize="none"
+                          placeholder="金额"
+                        />
+                        {asset.amountError ? <Text style={styles.assetAmountErrorText}>{asset.amountError}</Text> : null}
+                      </View>
+                      <View style={styles.classPickerWrap}>
+                        <View style={styles.classDisplayRow}>
+                          <Text style={styles.classLabelText}>{ASSET_CLASS_LABEL[asset.assetClass]}</Text>
+                          <Text style={styles.classArrowText}>▼</Text>
+                        </View>
+                        <Picker
+                          mode="dialog"
+                          selectedValue={asset.assetClass}
+                          onValueChange={(value) => updateAssetClass(asset.localId, value as AssetClass)}
+                          style={styles.classPickerOverlay}
+                        >
+                          {ASSET_CLASS_ORDER.map((assetClass) => (
+                            <Picker.Item key={assetClass} label={ASSET_CLASS_LABEL[assetClass]} value={assetClass} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </View>
+                  ))}
+                  {(group.meta?.parseResult.warnings ?? []).map((warn) => (
+                    <Text style={styles.warn} key={`${group.uri}-${warn}`}>
+                      {warn}
+                    </Text>
+                  ))}
+                  {group.meta?.rawOcrText ? (
+                    <View style={styles.ocrDebugWrap}>
+                      <Pressable style={styles.ocrDebugToggle} onPress={() => toggleOcrText(group.uri)}>
+                        <Text style={styles.ocrDebugToggleText}>
+                          {expandedOcrUris.includes(group.uri) ? "收起 OCR 原文" : "查看 OCR 原文"}
+                        </Text>
+                      </Pressable>
+                      {expandedOcrUris.includes(group.uri) ? (
+                        <TextInput
+                          value={group.meta.rawOcrText}
+                          editable={false}
+                          multiline
+                          style={styles.ocrDebugText}
+                        />
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
-              ))}
-              {parsed.warnings.map((warn) => (
-                <Text style={styles.warn} key={warn}>
-                  {warn}
-                </Text>
               ))}
               <Pressable style={styles.confirmButton} onPress={handleConfirmSnapshot}>
                 <Text style={styles.confirmButtonText}>{saveLoading ? "记录中..." : "确认并记录"}</Text>
@@ -1289,8 +1448,9 @@ const styles = StyleSheet.create({
   },
   assetRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 8
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 18
   },
   assetNameInput: {
     flex: 1,
@@ -1303,7 +1463,6 @@ const styles = StyleSheet.create({
     color: "#163d7a"
   },
   assetAmountInput: {
-    width: 110,
     borderColor: "#b7d4fb",
     borderWidth: 1,
     borderRadius: 8,
@@ -1311,6 +1470,65 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: "#f4f8ff",
     color: "#163d7a"
+  },
+  assetAmountWrap: {
+    width: 110,
+    position: "relative"
+  },
+  assetAmountErrorText: {
+    color: "#dc2626",
+    fontSize: 11,
+    position: "absolute",
+    top: 38,
+    left: 4
+  },
+  parseGroup: {
+    gap: 8,
+    marginBottom: 14,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(29,78,216,0.12)"
+  },
+  parseGroupHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
+  parseGroupTitle: {
+    color: "#163d7a",
+    fontWeight: "700"
+  },
+  parseGroupTotal: {
+    color: "#2563eb",
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  ocrDebugWrap: {
+    marginTop: 2,
+    gap: 8
+  },
+  ocrDebugToggle: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#e0edff"
+  },
+  ocrDebugToggleText: {
+    color: "#1d4ed8",
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  ocrDebugText: {
+    minHeight: 120,
+    borderColor: "#b7d4fb",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: "#f8fbff",
+    color: "#163d7a",
+    textAlignVertical: "top"
   },
   classPickerWrap: {
     width: 76,
