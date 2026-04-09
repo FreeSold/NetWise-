@@ -98,7 +98,7 @@ export async function queryTrendSeries(filter: TrendFilter): Promise<TrendPoint[
       if (filter !== "all" && asset.assetClass !== filter) {
         return sum;
       }
-      return sum + asset.amount;
+      return sum + (Number.isFinite(asset.amount) ? asset.amount : 0);
     }, 0);
     totalsByDate.set(snapshot.date, roundMoney((totalsByDate.get(snapshot.date) ?? 0) + snapshotTotal));
   }
@@ -114,7 +114,9 @@ export async function queryPlatformTrendSeries(platform: PlatformTrendFilter): P
 
   for (const snapshot of snapshots) {
     const snapshotTotal = snapshot.assets.reduce((sum, asset) => {
-      return belongsToPlatform(asset.source, platform) ? sum + asset.amount : sum;
+      return belongsToPlatform(asset.source, platform)
+        ? sum + (Number.isFinite(asset.amount) ? asset.amount : 0)
+        : sum;
     }, 0);
 
     if (snapshotTotal > 0) {
@@ -136,7 +138,8 @@ export async function queryDailySummary(date = getTodayDate()): Promise<DailySum
       continue;
     }
     for (const asset of snapshot.assets) {
-      byClass[asset.assetClass] = roundMoney(byClass[asset.assetClass] + asset.amount);
+      const add = Number.isFinite(asset.amount) ? asset.amount : 0;
+      byClass[asset.assetClass] = roundMoney(byClass[asset.assetClass] + add);
     }
   }
   const total = roundMoney(Object.values(byClass).reduce((sum, value) => sum + value, 0));
@@ -201,10 +204,16 @@ function emptyByClassTotals(): Record<AssetClass, number> {
 }
 
 function roundMoney(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
   return Math.round(value * 100) / 100;
 }
 
 function belongsToPlatform(source: ScreenType, platform: PlatformTrendFilter): boolean {
+  if (source === "custom") {
+    return false;
+  }
   if (platform === "cmb") {
     return source === "cmb_property" || source === "cmb_wealth";
   }

@@ -1,8 +1,8 @@
-import type { ParseResult, ParsedAsset, ScreenType } from "../domain/types";
-import { parseMoney, safeAsset } from "./shared";
+import type { OcrCustomRule, OcrRuleScreenScope, ParseResult, ParsedAsset, ScreenType } from "../domain/types";
+import { buildRuleSummary, parseMoney, safeAsset } from "./shared";
 
 type Template = {
-  type: ScreenType;
+  type: Exclude<ScreenType, "custom">;
   keywords: string[];
   parse: (raw: string) => ParsedAsset[];
 };
@@ -37,7 +37,9 @@ function isMostlyAmountLine(line: string): boolean {
   return /^[-+]?\d+(?:\.\d{1,2})?(?:[%＋+]\d+(?:\.\d{1,2})?)?$/.test(normalized);
 }
 
-function pickAmountByLabel(
+type PickMeta = { amount: number; matchedLabel: string };
+
+function pickAmountByLabelWithMeta(
   lines: string[],
   label: string | string[],
   options?: {
@@ -46,11 +48,11 @@ function pickAmountByLabel(
     sameLineOnly?: boolean;
     lookAheadLines?: number;
   }
-): number | null {
+): PickMeta | null {
   const excludeKeywords = options?.excludeKeywords ?? [];
   const labels = Array.isArray(label) ? label : [label];
   const lookAheadLines = options?.sameLineOnly ? 0 : Math.max(1, options?.lookAheadLines ?? 1);
-  const candidates: number[] = [];
+  const candidates: PickMeta[] = [];
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
@@ -64,7 +66,7 @@ function pickAmountByLabel(
 
     const inlineAmount = pickClosestInlineAmount(line, matchedLabel);
     if (inlineAmount !== null) {
-      candidates.push(inlineAmount);
+      candidates.push({ amount: inlineAmount, matchedLabel });
       continue;
     }
 
@@ -72,7 +74,7 @@ function pickAmountByLabel(
     for (const rawNum of sameLineNumbers) {
       const value = parseMoney(rawNum);
       if (value !== null) {
-        candidates.push(value);
+        candidates.push({ amount: value, matchedLabel });
       }
     }
 
@@ -90,7 +92,7 @@ function pickAmountByLabel(
         if (nextNumber) {
           const value = parseMoney(nextNumber);
           if (value !== null) {
-            candidates.push(value);
+            candidates.push({ amount: value, matchedLabel });
             break;
           }
         }
@@ -98,16 +100,16 @@ function pickAmountByLabel(
     }
   }
 
-  const normalized = options?.allowNegative ? candidates : candidates.filter((v) => v >= 0);
-  if (!normalized.length) {
+  const filtered = options?.allowNegative ? candidates : candidates.filter((c) => c.amount >= 0);
+  if (!filtered.length) {
     return null;
   }
-  return normalized.sort((a, b) => b - a)[0];
+  return filtered.sort((a, b) => b.amount - a.amount)[0];
 }
 
 function parseByLineRules(
   raw: string,
-  source: ScreenType,
+  source: Exclude<ScreenType, "custom">,
   rules: Array<{
     name: string;
     label: string | string[];
@@ -121,24 +123,131 @@ function parseByLineRules(
   const lines = toLines(raw);
   return rules
     .map((rule) => {
-      const amount = pickAmountByLabel(lines, rule.label, {
+      const picked = pickAmountByLabelWithMeta(lines, rule.label, {
         excludeKeywords: rule.excludeKeywords,
         allowNegative: rule.allowNegative,
         sameLineOnly: rule.sameLineOnly ?? true,
         lookAheadLines: rule.lookAheadLines
       });
-      if (amount === null) {
+      if (!picked) {
         return null;
       }
+      const { amount, matchedLabel } = picked;
+      const displayLabel = matchedLabel.trim() || rule.name;
       return safeAsset({
-        name: rule.name,
+        name: displayLabel,
         amount,
         assetClass: rule.assetClass,
         source,
-        confidence: 0.9
+        confidence: 0.9,
+        recognizedLabel: displayLabel,
+        ruleSummary: buildRuleSummary(displayLabel, amount, rule.assetClass)
       });
     })
     .filter((item): item is ParsedAsset => item !== null);
+}
+
+function compactForMatch(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
+/** 在已去空白的字符串中，取 anchor 之后出现的第一个金额数字（可与关键词紧挨或间隔若干非数字字符） */
+function firstNumberAfterAnchorInCompact(compactLine: string, anchorCompact: string): number | null {
+  const idx = compactLine.indexOf(anchorCompact);
+  if (idx < 0) {
+    return null;
+  }
+  const tail = compactLine.slice(idx + anchorCompact.length);
+  const m = tail.match(/-?\d[\d,]*(?:\.\d{1,2})?/);
+  if (!m) {
+    return null;
+  }
+  return parseMoney(m[0]);
+}
+
+function ruleScreenScopeAllows(rule: OcrCustomRule, detectedScreen: ParseResult["screenType"]): boolean {
+  const scope: OcrRuleScreenScope = rule.screenScope ?? "any";
+  if (scope === "any") {
+    return true;
+  }
+  return scope === detectedScreen;
+}
+
+function parseCustomRules(raw: string, rules: OcrCustomRule[], detectedScreen: ParseResult["screenType"]): ParsedAsset[] {
+  if (!rules.length) {
+    return [];
+  }
+  const compactOcr = compactForMatch(raw);
+  const lines = toLines(raw);
+  const linesToScan = lines.length > 0 ? lines : [raw];
+  const assets: ParsedAsset[] = [];
+
+  for (const rule of rules) {
+    if (!ruleScreenScopeAllows(rule, detectedScreen)) {
+      continue;
+    }
+    const anchor = compactForMatch(rule.sourceSnippet.trim());
+    if (!anchor || !compactOcr.includes(anchor)) {
+      continue;
+    }
+
+    const candidateAmounts: number[] = [];
+
+    for (let i = 0; i < linesToScan.length; i += 1) {
+      const line = linesToScan[i];
+      const lc = compactForMatch(line);
+      if (!lc.includes(anchor)) {
+        continue;
+      }
+
+      const inline = firstNumberAfterAnchorInCompact(lc, anchor);
+      if (inline !== null && Number.isFinite(inline) && inline >= 0) {
+        candidateAmounts.push(inline);
+        continue;
+      }
+
+      if (i + 1 < linesToScan.length) {
+        const nextLine = linesToScan[i + 1];
+        if (isMostlyAmountLine(nextLine)) {
+          const nums = nextLine.match(NUMBER_RE) ?? [];
+          const first = nums[0];
+          if (first) {
+            const v = parseMoney(first);
+            if (v !== null && v >= 0) {
+              candidateAmounts.push(v);
+            }
+          }
+        }
+      }
+    }
+
+    if (!candidateAmounts.length) {
+      const fallback = firstNumberAfterAnchorInCompact(compactOcr, anchor);
+      if (fallback !== null && Number.isFinite(fallback) && fallback >= 0) {
+        candidateAmounts.push(fallback);
+      }
+    }
+
+    if (!candidateAmounts.length) {
+      continue;
+    }
+
+    const amount = Math.max(...candidateAmounts);
+    const label = rule.recognizedContent.trim() || rule.sourceSnippet.trim();
+    const built = safeAsset({
+      name: label,
+      amount,
+      assetClass: rule.assetClass,
+      source: "custom",
+      confidence: 0.82,
+      recognizedLabel: label,
+      ruleSummary: buildRuleSummary(label, amount, rule.assetClass)
+    });
+    if (built) {
+      assets.push(built);
+    }
+  }
+  return assets;
 }
 
 const templates: Template[] = [
@@ -266,26 +375,38 @@ function parseReportedTotal(lines: string[]): number | undefined {
   return undefined;
 }
 
-export function parseOcrText(raw: string): ParseResult {
+export function parseOcrText(raw: string, customRules: OcrCustomRule[] = []): ParseResult {
   const compactText = raw.replace(/\s+/g, "");
   const lines = toLines(raw);
   const screenType = detectScreenType(compactText);
+  const customAssets = parseCustomRules(raw, customRules, screenType);
+
   if (screenType === "unknown") {
+    const warnings: string[] = [];
+    if (!customAssets.length) {
+      warnings.push("暂未识别到支持的页面，请检查截图是否包含页面标题与金额。");
+    }
     return {
       screenType,
-      assets: [],
+      assets: customAssets,
       reportedTotal: parseReportedTotal(lines),
-      warnings: ["暂未识别到支持的页面，请检查截图是否包含页面标题与金额。"]
+      warnings
     };
   }
 
   const template = templates.find((item) => item.type === screenType);
-  const assets = template ? template.parse(raw) : [];
+  const templateAssets = template ? template.parse(raw) : [];
+  const assets = [...templateAssets, ...customAssets];
+
+  const warnings: string[] = [];
+  if (!templateAssets.length && !customAssets.length) {
+    warnings.push("识别到了页面类型，但未提取到金额。建议调整截图范围或在设置中添加自定义规则。");
+  }
 
   return {
     screenType,
     assets,
     reportedTotal: parseReportedTotal(lines),
-    warnings: assets.length ? [] : ["识别到了页面类型，但未提取到金额。建议调整截图范围。"]
+    warnings
   };
 }

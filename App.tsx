@@ -6,10 +6,11 @@ import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { Picker } from "@react-native-picker/picker";
 import Slider from "@react-native-community/slider";
-import { Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
-import type { AssetClass, ParsedAsset, ParseResult } from "./src/domain/types";
+import { Alert, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
+import type { AssetClass, OcrCustomRule, OcrRuleScreenScope, ParsedAsset, ParseResult } from "./src/domain/types";
 import { TrendLineChart } from "./src/components/TrendLineChart";
 import { recognizeTextFromImage } from "./src/ocr/ocrSpace";
+import { buildRuleSummary, formatDisplayAmount } from "./src/parsers/shared";
 import { parseOcrText } from "./src/parsers/templates";
 import {
   authenticateWithBiometrics,
@@ -34,6 +35,7 @@ import {
   type TrendFilter,
   type TrendPoint
 } from "./src/storage/assetHistoryDb";
+import { loadOcrCustomRules, saveOcrCustomRules } from "./src/storage/ocrCustomRulesStore";
 
 const ASSET_CLASS_ORDER: AssetClass[] = ["cash", "fund", "insurance", "stock", "wealth_management"];
 const ASSET_CLASS_LABEL: Record<AssetClass, string> = {
@@ -70,7 +72,28 @@ const SCREEN_TYPE_LABEL: Record<ParseResult["screenType"], string> = {
   alipay_wealth: "支付宝理财页",
   alipay_fund: "支付宝基金页",
   wechat_wallet: "微信钱包页",
+  custom: "自定义规则",
   unknown: "未识别页面"
+};
+
+const OCR_RULE_SCOPE_ORDER: OcrRuleScreenScope[] = [
+  "any",
+  "unknown",
+  "cmb_property",
+  "cmb_wealth",
+  "alipay_wealth",
+  "alipay_fund",
+  "wechat_wallet"
+];
+
+const OCR_RULE_SCOPE_LABEL: Record<OcrRuleScreenScope, string> = {
+  any: "不限页面（每张图都尝试）",
+  unknown: "仅「未识别页面」时",
+  cmb_property: "仅招商银行财产页",
+  cmb_wealth: "仅招商银行理财页",
+  alipay_wealth: "仅支付宝理财页",
+  alipay_fund: "仅支付宝基金页",
+  wechat_wallet: "仅微信钱包页"
 };
 
 type EditableAssetItem = ParsedAsset & {
@@ -141,7 +164,15 @@ export default function App() {
   const [cardOpacityPercent, setCardOpacityPercent] = useState(86);
   const [parsed, setParsed] = useState<ParseResult>(EMPTY_PARSE_RESULT);
   const [editableAssets, setEditableAssets] = useState<EditableAssetItem[]>([]);
+  const [ocrCustomRules, setOcrCustomRules] = useState<OcrCustomRule[]>([]);
   const [expandedOcrUris, setExpandedOcrUris] = useState<string[]>([]);
+  const [customRuleNotice, setCustomRuleNotice] = useState<string | null>(null);
+  const [ruleDraftSource, setRuleDraftSource] = useState("");
+  const [ruleDraftContent, setRuleDraftContent] = useState("");
+  const [ruleDraftClass, setRuleDraftClass] = useState<AssetClass>("cash");
+  const [ruleDraftScope, setRuleDraftScope] = useState<OcrRuleScreenScope>("any");
+  const [ocrRuleModalVisible, setOcrRuleModalVisible] = useState(false);
+  const [ocrRuleEditingId, setOcrRuleEditingId] = useState<string | null>(null);
 
   const cashAmount = dailySummary.byClass.cash;
   const fundAmount = dailySummary.byClass.fund;
@@ -188,10 +219,30 @@ export default function App() {
       if (!dbReady) {
         return;
       }
-      await refreshTrendData(trendFilter);
+      try {
+        await refreshTrendData(trendFilter);
+      } catch (error) {
+        console.error("TREND_LOAD_FAILED", error);
+      }
     }
     void loadTrend();
   }, [dbReady, trendFilter]);
+
+  useEffect(() => {
+    if (!appUnlocked) {
+      return;
+    }
+    void (async () => {
+      try {
+        const rules = await loadOcrCustomRules();
+        setOcrCustomRules(rules);
+        setCustomRuleNotice(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "规则加载失败";
+        setCustomRuleNotice(message);
+      }
+    })();
+  }, [appUnlocked]);
 
   async function computeImageHash(uri: string): Promise<string> {
     const base64Payload = await FileSystem.readAsStringAsync(uri, {
@@ -232,6 +283,10 @@ export default function App() {
     setPreviewModalVisible(false);
   }
 
+  function toggleOcrText(uri: string) {
+    setExpandedOcrUris((prev) => (prev.includes(uri) ? prev.filter((item) => item !== uri) : [...prev, uri]));
+  }
+
   async function refreshTrendData(filter: TrendFilter) {
     const [mainPoints, alipayPoints, cmbPoints, wechatPoints] = await Promise.all([
       queryTrendSeries(filter),
@@ -248,7 +303,26 @@ export default function App() {
   }
 
   function updateAssetName(localId: string, name: string) {
-    setEditableAssets((prev) => prev.map((a) => (a.localId === localId ? { ...a, name } : a)));
+    setEditableAssets((prev) =>
+      prev.map((a) => {
+        if (a.localId !== localId) {
+          return a;
+        }
+        const label = name.trim() || a.recognizedLabel || "—";
+        return {
+          ...a,
+          name,
+          ruleSummary: buildRuleSummary(label, a.amount, a.assetClass)
+        };
+      })
+    );
+  }
+
+  function getNameValidationMessage(name: string): string | null {
+    if (!name.trim()) {
+      return "请填写金额名称";
+    }
+    return null;
   }
 
   function getAmountValidationMessage(amountInput: string): string | null {
@@ -274,11 +348,14 @@ export default function App() {
         }
         const normalized = amountRaw.replace(/,/g, "").trim();
         const amount = Number(normalized);
+        const nextAmount = normalized && Number.isFinite(amount) ? amount : a.amount;
+        const label = a.name.trim() || a.recognizedLabel || "—";
         return {
           ...a,
           amountInput: amountRaw,
-          amount: normalized && Number.isFinite(amount) ? amount : a.amount,
-          amountError: null
+          amount: nextAmount,
+          amountError: null,
+          ruleSummary: buildRuleSummary(label, nextAmount, a.assetClass)
         };
       })
     );
@@ -294,10 +371,13 @@ export default function App() {
         const amountError = getAmountValidationMessage(a.amountInput);
         if (!amountError) {
           const normalized = a.amountInput.replace(/,/g, "").trim();
+          const num = Number(normalized);
+          const label = a.name.trim() || a.recognizedLabel || "—";
           return {
             ...a,
-            amount: Number(normalized),
-            amountError: null
+            amount: num,
+            amountError: null,
+            ruleSummary: buildRuleSummary(label, num, a.assetClass)
           };
         }
         isValid = false;
@@ -311,7 +391,146 @@ export default function App() {
   }
 
   function updateAssetClass(localId: string, assetClass: AssetClass) {
-    setEditableAssets((prev) => prev.map((a) => (a.localId === localId ? { ...a, assetClass } : a)));
+    setEditableAssets((prev) =>
+      prev.map((a) => {
+        if (a.localId !== localId) {
+          return a;
+        }
+        const label = a.name.trim() || a.recognizedLabel || "—";
+        return {
+          ...a,
+          assetClass,
+          ruleSummary: buildRuleSummary(label, a.amount, assetClass)
+        };
+      })
+    );
+  }
+
+  function addManualAssetRow(imageUri: string) {
+    const localId = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    setEditableAssets((prev) => [
+      ...prev,
+      {
+        name: "",
+        amount: 0,
+        currency: "CNY",
+        assetClass: "cash",
+        source: "custom",
+        confidence: 1,
+        imageUri,
+        localId,
+        amountInput: "",
+        amountError: null
+      }
+    ]);
+  }
+
+  function removeEditableAsset(localId: string) {
+    setEditableAssets((prev) => prev.filter((a) => a.localId !== localId));
+  }
+
+  function confirmRemoveAssetRow(localId: string) {
+    Alert.alert("删除该行？", "将从当前解析列表移除，不影响已保存的历史。", [
+      { text: "取消", style: "cancel" },
+      { text: "删除", style: "destructive", onPress: () => removeEditableAsset(localId) }
+    ]);
+  }
+
+  function resetOcrRuleDraft() {
+    setRuleDraftSource("");
+    setRuleDraftContent("");
+    setRuleDraftClass("cash");
+    setRuleDraftScope("any");
+  }
+
+  function openOcrRuleModalForCreate() {
+    setOcrRuleEditingId(null);
+    resetOcrRuleDraft();
+    setOcrRuleModalVisible(true);
+  }
+
+  function openOcrRuleModalForEdit(rule: OcrCustomRule) {
+    setOcrRuleEditingId(rule.id);
+    setRuleDraftSource(rule.sourceSnippet);
+    setRuleDraftContent(rule.recognizedContent);
+    setRuleDraftClass(rule.assetClass);
+    setRuleDraftScope(rule.screenScope ?? "any");
+    setOcrRuleModalVisible(true);
+  }
+
+  function closeOcrRuleModal() {
+    setOcrRuleModalVisible(false);
+    setOcrRuleEditingId(null);
+    resetOcrRuleDraft();
+  }
+
+  async function handleSaveOcrCustomRuleFromModal() {
+    const sourceSnippet = ruleDraftSource.trim();
+    const recognizedContent = ruleDraftContent.trim();
+    if (!sourceSnippet || !recognizedContent) {
+      setCustomRuleNotice("请填写原文与识别内容（金额名称）。");
+      setTimeout(() => setCustomRuleNotice(null), 2500);
+      return;
+    }
+    const buildRule = (id: string): OcrCustomRule => {
+      const row: OcrCustomRule = {
+        id,
+        sourceSnippet,
+        recognizedContent,
+        assetClass: ruleDraftClass
+      };
+      if (ruleDraftScope !== "any") {
+        row.screenScope = ruleDraftScope;
+      }
+      return row;
+    };
+    let next: OcrCustomRule[];
+    if (ocrRuleEditingId) {
+      next = ocrCustomRules.map((r) => (r.id === ocrRuleEditingId ? buildRule(r.id) : r));
+    } else {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      next = [...ocrCustomRules, buildRule(id)];
+    }
+    setOcrCustomRules(next);
+    try {
+      await saveOcrCustomRules(next);
+      setCustomRuleNotice("已保存规则。");
+      setTimeout(() => setCustomRuleNotice(null), 2000);
+      closeOcrRuleModal();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存失败";
+      setCustomRuleNotice(message);
+    }
+  }
+
+  async function handleRemoveOcrCustomRule(id: string) {
+    const next = ocrCustomRules.filter((r) => r.id !== id);
+    setOcrCustomRules(next);
+    try {
+      await saveOcrCustomRules(next);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "删除后保存失败";
+      setCustomRuleNotice(message);
+    }
+  }
+
+  function confirmDeleteOcrRuleInModal() {
+    const id = ocrRuleEditingId;
+    if (!id) {
+      return;
+    }
+    Alert.alert("删除此规则？", "将从本机规则列表移除。", [
+      { text: "取消", style: "cancel" },
+      {
+        text: "删除",
+        style: "destructive",
+        onPress: () =>
+          void (async () => {
+            await handleRemoveOcrCustomRule(id);
+            closeOcrRuleModal();
+          })()
+      }
+    ]);
   }
 
   function movePlatformModuleToVisible(platform: PlatformTrendFilter) {
@@ -355,10 +574,6 @@ export default function App() {
     return rawMessage;
   }
 
-  function toggleOcrText(uri: string) {
-    setExpandedOcrUris((prev) => (prev.includes(uri) ? prev.filter((item) => item !== uri) : [...prev, uri]));
-  }
-
   async function runOcrForAsset(imageUri: string) {
     setSelectedImageUris((prev) => (prev.includes(imageUri) ? prev : [...prev, imageUri].slice(0, 6)));
     setOcrLoading(true);
@@ -368,7 +583,7 @@ export default function App() {
       const imageHash = await computeImageHash(imageUri);
       const text = await recognizeTextFromImage(imageUri);
       console.log("[OCR_FULL_TEXT_BEGIN]\n" + text + "\n[OCR_FULL_TEXT_END]");
-      const parsedResult = parseOcrText(text);
+      const parsedResult = parseOcrText(text, ocrCustomRules);
       const nextAssetItems = parsedResult.assets.map((asset, index) => ({
         ...asset,
         imageUri,
@@ -495,33 +710,45 @@ export default function App() {
     setSaveNotice("正在记录数据...");
     try {
       const validationErrors: string[] = [];
+      for (const asset of editableAssets) {
+        const amountError = getAmountValidationMessage(asset.amountInput);
+        const nameError = getNameValidationMessage(asset.name);
+        if (amountError) {
+          validationErrors.push(`${asset.name.trim() || "未命名"}：${amountError}`);
+        } else if (nameError) {
+          validationErrors.push(`${asset.ruleSummary ?? "某一行"}：${nameError}`);
+        }
+      }
       setEditableAssets((prev) =>
-        prev.map((asset) => {
-          const amountError = getAmountValidationMessage(asset.amountInput);
-          if (amountError) {
-            validationErrors.push(`${asset.name}: ${amountError}`);
-            return { ...asset, amountError };
-          }
-          return {
-            ...asset,
-            amount: Number(asset.amountInput.replace(/,/g, "").trim()),
-            amountError: null
-          };
-        })
+        prev.map((asset) => ({
+          ...asset,
+          amountError: getAmountValidationMessage(asset.amountInput)
+        }))
       );
       if (validationErrors.length) {
         setSaveNotice(`记录失败：${validationErrors[0]}`);
         setSaveLoading(false);
         return;
       }
-      const normalizedAssets = editableAssets.map(({ amountInput, amountError, ...asset }) => ({
-        ...asset,
-        amount: Number(amountInput.replace(/,/g, "").trim())
-      }));
-      const result = await saveImportSnapshot(
-        currentImageHashes,
-        normalizedAssets.map(({ imageUri, localId, ...asset }) => asset)
-      );
+      const toSave: ParsedAsset[] = editableAssets.map((row) => {
+        const amount = Number(row.amountInput.replace(/,/g, "").trim());
+        const label = row.name.trim() || row.recognizedLabel || "—";
+        const summary = buildRuleSummary(label, amount, row.assetClass);
+        const item: ParsedAsset = {
+          name: row.name.trim(),
+          amount,
+          currency: "CNY",
+          assetClass: row.assetClass,
+          source: row.source,
+          confidence: row.confidence,
+          ruleSummary: summary
+        };
+        if (row.recognizedLabel) {
+          item.recognizedLabel = row.recognizedLabel;
+        }
+        return item;
+      });
+      const result = await saveImportSnapshot(currentImageHashes, toSave);
       setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
       await refreshTrendData(trendFilter);
       const summary = await queryDailySummary();
@@ -774,6 +1001,106 @@ export default function App() {
         </View>
       </Modal>
 
+      <Modal
+        visible={ocrRuleModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={closeOcrRuleModal}
+      >
+        <View style={styles.overlayMask}>
+          <Pressable style={styles.overlayMaskTouch} onPress={closeOcrRuleModal} />
+          <View style={styles.ocrRuleModalKeyboard}>
+            <View style={styles.ocrRuleModalSheet}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.ocrRuleModalScroll}
+              >
+              <Text style={styles.ocrRuleModalTitle}>{ocrRuleEditingId ? "编辑规则" : "添加规则"}</Text>
+              <Text style={styles.settingsSubLabel}>原文（锚点关键词）</Text>
+              <Text style={styles.muted}>
+                OCR 去掉空白后须包含这一段；金额自动取关键词之后出现的第一个数字（可与关键词紧挨或隔几个符号）。
+              </Text>
+              <TextInput
+                value={ruleDraftSource}
+                onChangeText={setRuleDraftSource}
+                placeholder="如 创业板指、存款"
+                placeholderTextColor="#94a3b8"
+                style={styles.settingsFieldInput}
+                autoCorrect={false}
+                autoCapitalize="none"
+                multiline
+              />
+              <Text style={styles.settingsSubLabel}>识别内容（金额名称默认值）</Text>
+              <TextInput
+                value={ruleDraftContent}
+                onChangeText={setRuleDraftContent}
+                placeholder="如 存款"
+                placeholderTextColor="#94a3b8"
+                style={styles.settingsFieldInput}
+                autoCorrect={false}
+              />
+              <Text style={styles.settingsSubLabel}>资产分类</Text>
+              <View style={styles.settingsOcrPickerWrap}>
+                <View style={styles.classDisplayRow}>
+                  <Text style={styles.classLabelText} numberOfLines={1}>
+                    {ASSET_CLASS_LABEL[ruleDraftClass]}
+                  </Text>
+                  <Text style={styles.classArrowText}>▼</Text>
+                </View>
+                <Picker
+                  mode="dialog"
+                  selectedValue={ruleDraftClass}
+                  onValueChange={(v) => setRuleDraftClass(v as AssetClass)}
+                  style={styles.classPickerOverlay}
+                >
+                  {ASSET_CLASS_ORDER.map((c) => (
+                    <Picker.Item key={c} label={ASSET_CLASS_LABEL[c]} value={c} />
+                  ))}
+                </Picker>
+              </View>
+              <Text style={styles.settingsSubLabel}>限定页面（防跨 App 误匹配）</Text>
+              <View style={[styles.settingsOcrPickerWrap, styles.settingsOcrScopePickerWrap]}>
+                <View style={styles.settingsScopeDisplayRow}>
+                  <Text style={[styles.classLabelText, styles.settingsScopePickerLabel]} numberOfLines={2}>
+                    {OCR_RULE_SCOPE_LABEL[ruleDraftScope]}
+                  </Text>
+                  <Text style={styles.classArrowText}>▼</Text>
+                </View>
+                <Picker
+                  mode="dialog"
+                  selectedValue={ruleDraftScope}
+                  onValueChange={(v) => setRuleDraftScope(v as OcrRuleScreenScope)}
+                  style={styles.classPickerOverlay}
+                >
+                  {OCR_RULE_SCOPE_ORDER.map((scope) => (
+                    <Picker.Item key={scope} label={OCR_RULE_SCOPE_LABEL[scope]} value={scope} />
+                  ))}
+                </Picker>
+              </View>
+              <View style={styles.ocrRuleModalActions}>
+                {ocrRuleEditingId ? (
+                  <Pressable style={styles.ocrRuleModalDeleteButton} onPress={confirmDeleteOcrRuleInModal}>
+                    <Text style={styles.ocrRuleModalDeleteText}>删除规则</Text>
+                  </Pressable>
+                ) : (
+                  <View style={styles.ocrRuleModalActionsSpacer} />
+                )}
+                <View style={styles.ocrRuleModalActionsRight}>
+                  <Pressable style={styles.ocrRuleModalSecondaryButton} onPress={closeOcrRuleModal}>
+                    <Text style={styles.ocrRuleModalSecondaryText}>取消</Text>
+                  </Pressable>
+                  <Pressable style={styles.ocrRuleModalPrimaryButton} onPress={() => void handleSaveOcrCustomRuleFromModal()}>
+                    <Text style={styles.ocrRuleModalPrimaryText}>保存</Text>
+                  </Pressable>
+                </View>
+              </View>
+              </ScrollView>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ScrollView contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
         <View style={styles.heroCard}>
           <View style={styles.heroTopRow}>
@@ -787,12 +1114,7 @@ export default function App() {
               </Pressable>
             </View>
           </View>
-          <Text style={styles.heroTotal}>
-            {dailySummary.total.toLocaleString("zh-CN", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2
-            })}
-          </Text>
+          <Text style={styles.heroTotal}>{formatDisplayAmount(dailySummary.total)}</Text>
           {dbInitError ? <Text style={styles.heroError}>数据库异常：{dbInitError}</Text> : null}
           <View style={styles.quickStatRow}>
             <View style={styles.quickStatItem}>
@@ -862,6 +1184,11 @@ export default function App() {
               <Text style={styles.settingsClose}>完成</Text>
             </Pressable>
           </View>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.settingsScrollContent}
+            showsVerticalScrollIndicator={false}
+          >
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <Text style={styles.settingsLabel}>卡片透明度: {cardOpacityPercent}%</Text>
             <View style={styles.opacityRow}>
@@ -936,6 +1263,80 @@ export default function App() {
               )}
             </View>
           </View>
+
+          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+            <Text style={styles.settingsLabel}>自定义 OCR 识别规则</Text>
+            <Text style={styles.muted}>
+              规则保存在本机（netwise-ocr-custom-rules.json）。「原文」为锚点关键词（去空白后 OCR 须包含）；金额自动取该关键词之后出现的数字，无需与某笔固定金额一致。可选「限定页面」防跨 App 误匹配。
+            </Text>
+            {customRuleNotice ? (
+              <Text style={customRuleNotice.includes("已保存") ? styles.muted : styles.warn}>{customRuleNotice}</Text>
+            ) : null}
+            {ocrCustomRules.length ? (
+              <View style={styles.settingsRuleListSection}>
+                <Text style={styles.settingsSubLabel}>已添加的规则</Text>
+                <Text style={styles.muted}>点击一行可查看全文并编辑；下方按钮添加新规则。</Text>
+                <View style={styles.assetTableHeaderRow}>
+                  <View style={styles.ruleColSource}>
+                    <Text style={styles.fieldCaption}>原文</Text>
+                  </View>
+                  <View style={styles.ruleColContent}>
+                    <Text style={styles.fieldCaption}>识别内容</Text>
+                  </View>
+                  <View style={styles.ruleColClass}>
+                    <Text style={styles.fieldCaption}>分类</Text>
+                  </View>
+                  <View style={styles.ruleColScope}>
+                    <Text style={styles.fieldCaption}>限定页面</Text>
+                  </View>
+                </View>
+                {ocrCustomRules.map((rule) => (
+                  <Pressable
+                    key={rule.id}
+                    style={({ pressed }) => [styles.ruleListRowPress, pressed && styles.ruleListRowPressPressed]}
+                    onPress={() => openOcrRuleModalForEdit(rule)}
+                  >
+                    <View style={styles.assetRow}>
+                      <View style={styles.ruleColSource}>
+                        <View style={styles.ruleListCellBox}>
+                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                            {rule.sourceSnippet}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.ruleColContent}>
+                        <View style={styles.ruleListCellBox}>
+                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                            {rule.recognizedContent}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.ruleColClass}>
+                        <View style={styles.ruleListCellBox}>
+                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                            {ASSET_CLASS_LABEL[rule.assetClass]}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.ruleColScope}>
+                        <View style={styles.ruleListCellBox}>
+                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                            {OCR_RULE_SCOPE_LABEL[(rule.screenScope ?? "any") as OcrRuleScreenScope]}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.muted}>暂无自定义规则。点击下方按钮添加。</Text>
+            )}
+            <Pressable style={styles.securityActionButton} onPress={openOcrRuleModalForCreate}>
+              <Text style={styles.securityActionButtonText}>添加规则</Text>
+            </Pressable>
+          </View>
+          </ScrollView>
         </SafeAreaView>
       ) : null}
 
@@ -1005,41 +1406,80 @@ export default function App() {
                     <Text style={styles.parseGroupTotal}>当前页面总额：{group.total.toFixed(2)}</Text>
                   </View>
                   <Text style={styles.line}>页面类型：{SCREEN_TYPE_LABEL[group.meta?.parseResult.screenType ?? "unknown"]}</Text>
-                  {group.assets.map((asset) => (
-                    <View style={styles.assetRow} key={asset.localId}>
-                      <TextInput
-                        value={asset.name}
-                        onChangeText={(value) => updateAssetName(asset.localId, value)}
-                        style={styles.assetNameInput}
-                        placeholder="资产名称"
-                      />
-                      <View style={styles.assetAmountWrap}>
-                        <TextInput
-                          value={asset.amountInput}
-                          onChangeText={(value) => updateAssetAmount(asset.localId, value)}
-                          onBlur={() => validateAssetAmount(asset.localId)}
-                          style={styles.assetAmountInput}
-                          autoCorrect={false}
-                          autoCapitalize="none"
-                          placeholder="金额"
-                        />
-                        {asset.amountError ? <Text style={styles.assetAmountErrorText}>{asset.amountError}</Text> : null}
+                  <Pressable style={styles.addRowButton} onPress={() => addManualAssetRow(group.uri)}>
+                    <Text style={styles.addRowButtonText}>+ 手动添加一行</Text>
+                  </Pressable>
+                  {group.assets.length ? (
+                    <View style={styles.assetTableHeaderRow}>
+                      <View style={styles.assetNameColumn}>
+                        <Text style={styles.fieldCaption}>金额名称</Text>
                       </View>
-                      <View style={styles.classPickerWrap}>
-                        <View style={styles.classDisplayRow}>
-                          <Text style={styles.classLabelText}>{ASSET_CLASS_LABEL[asset.assetClass]}</Text>
-                          <Text style={styles.classArrowText}>▼</Text>
+                      <View style={styles.assetAmountWrap}>
+                        <Text style={styles.fieldCaption}>金额</Text>
+                      </View>
+                      <View style={styles.classPickerColumn}>
+                        <Text style={styles.fieldCaption}>分类</Text>
+                      </View>
+                    </View>
+                  ) : null}
+                  {group.assets.map((asset) => (
+                    <View style={styles.assetBlock} key={asset.localId}>
+                      <View style={styles.assetRow}>
+                        <View style={styles.assetNameColumn}>
+                          <View style={styles.assetNameFieldWrap}>
+                            <Pressable
+                              style={styles.assetNameClearPress}
+                              hitSlop={6}
+                              onPress={() => confirmRemoveAssetRow(asset.localId)}
+                            >
+                              <Text style={styles.assetNameClearText}>×</Text>
+                            </Pressable>
+                            <TextInput
+                              value={asset.name}
+                              onChangeText={(value) => updateAssetName(asset.localId, value)}
+                              style={styles.assetNameInput}
+                              placeholder="金额名称"
+                              placeholderTextColor="#94a3b8"
+                            />
+                          </View>
                         </View>
-                        <Picker
-                          mode="dialog"
-                          selectedValue={asset.assetClass}
-                          onValueChange={(value) => updateAssetClass(asset.localId, value as AssetClass)}
-                          style={styles.classPickerOverlay}
-                        >
-                          {ASSET_CLASS_ORDER.map((assetClass) => (
-                            <Picker.Item key={assetClass} label={ASSET_CLASS_LABEL[assetClass]} value={assetClass} />
-                          ))}
-                        </Picker>
+                        <View style={styles.assetAmountWrap}>
+                          <TextInput
+                            value={asset.amountInput}
+                            onChangeText={(value) => updateAssetAmount(asset.localId, value)}
+                            onBlur={() => validateAssetAmount(asset.localId)}
+                            style={styles.assetAmountInput}
+                            autoCorrect={false}
+                            autoCapitalize="none"
+                            placeholder="金额"
+                            placeholderTextColor="#94a3b8"
+                          />
+                          {asset.amountError ? <Text style={styles.assetAmountErrorText}>{asset.amountError}</Text> : null}
+                        </View>
+                        <View style={styles.classPickerColumn}>
+                          <View style={styles.classPickerWrap}>
+                            <View style={styles.classDisplayRow}>
+                              <Text
+                                style={[styles.classLabelText, styles.parseClassPickerLabel]}
+                                numberOfLines={1}
+                                ellipsizeMode="tail"
+                              >
+                                {ASSET_CLASS_LABEL[asset.assetClass]}
+                              </Text>
+                              <Text style={styles.classArrowText}>▼</Text>
+                            </View>
+                            <Picker
+                              mode="dialog"
+                              selectedValue={asset.assetClass}
+                              onValueChange={(value) => updateAssetClass(asset.localId, value as AssetClass)}
+                              style={styles.classPickerOverlay}
+                            >
+                              {ASSET_CLASS_ORDER.map((assetClass) => (
+                                <Picker.Item key={assetClass} label={ASSET_CLASS_LABEL[assetClass]} value={assetClass} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </View>
                       </View>
                     </View>
                   ))}
@@ -1050,18 +1490,24 @@ export default function App() {
                   ))}
                   {group.meta?.rawOcrText ? (
                     <View style={styles.ocrDebugWrap}>
-                      <Pressable style={styles.ocrDebugToggle} onPress={() => toggleOcrText(group.uri)}>
-                        <Text style={styles.ocrDebugToggleText}>
+                      <Pressable style={styles.addRowButton} onPress={() => toggleOcrText(group.uri)}>
+                        <Text style={styles.addRowButtonText}>
                           {expandedOcrUris.includes(group.uri) ? "收起 OCR 原文" : "查看 OCR 原文"}
                         </Text>
                       </Pressable>
                       {expandedOcrUris.includes(group.uri) ? (
-                        <TextInput
-                          value={group.meta.rawOcrText}
-                          editable={false}
-                          multiline
-                          style={styles.ocrDebugText}
-                        />
+                        <>
+                          <Text style={styles.ocrSourceHint}>OCR 原文（长按可选中部分文字后复制）</Text>
+                          <ScrollView
+                            nestedScrollEnabled
+                            style={styles.ocrSelectableScroll}
+                            keyboardShouldPersistTaps="handled"
+                          >
+                            <Text selectable style={styles.ocrSelectableText}>
+                              {group.meta.rawOcrText}
+                            </Text>
+                          </ScrollView>
+                        </>
                       ) : null}
                     </View>
                   ) : null}
@@ -1446,18 +1892,89 @@ const styles = StyleSheet.create({
     color: "#1d4ed8",
     fontSize: 14
   },
+  assetTableHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    flexWrap: "nowrap",
+    width: "100%",
+    gap: 0,
+    marginBottom: 4,
+    paddingBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(29,78,216,0.12)"
+  },
   assetRow: {
     flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 8,
-    marginBottom: 18
+    alignItems: "center",
+    flexWrap: "nowrap",
+    width: "100%",
+    gap: 0
+  },
+  assetBlock: {
+    width: "100%",
+    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(29,78,216,0.08)"
+  },
+  fieldCaption: {
+    fontSize: 11,
+    color: "#4f76b3",
+    marginBottom: 4
+  },
+  assetNameColumn: {
+    width: "33.33%",
+    minWidth: 0,
+    paddingRight: 4
+  },
+  classPickerColumn: {
+    width: "33.34%",
+    minWidth: 0,
+    paddingLeft: 2
+  },
+  assetNameFieldWrap: {
+    flex: 1,
+    alignSelf: "stretch",
+    position: "relative",
+    minWidth: 0
+  },
+  assetNameClearPress: {
+    position: "absolute",
+    top: 3,
+    left: 3,
+    zIndex: 2,
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 6
+  },
+  assetNameClearText: {
+    color: "#94a3b8",
+    fontSize: 20,
+    fontWeight: "500",
+    lineHeight: 22
+  },
+  addRowButton: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#e0edff",
+    marginBottom: 8
+  },
+  addRowButtonText: {
+    color: "#1d4ed8",
+    fontSize: 12,
+    fontWeight: "600"
   },
   assetNameInput: {
-    flex: 1,
+    alignSelf: "stretch",
     borderColor: "#b7d4fb",
     borderWidth: 1,
     borderRadius: 8,
-    paddingHorizontal: 8,
+    paddingLeft: 34,
+    paddingRight: 8,
     paddingVertical: 6,
     backgroundColor: "#f4f8ff",
     color: "#163d7a"
@@ -1472,7 +1989,9 @@ const styles = StyleSheet.create({
     color: "#163d7a"
   },
   assetAmountWrap: {
-    width: 110,
+    width: "33.33%",
+    minWidth: 0,
+    paddingHorizontal: 2,
     position: "relative"
   },
   assetAmountErrorText: {
@@ -1483,6 +2002,7 @@ const styles = StyleSheet.create({
     left: 4
   },
   parseGroup: {
+    width: "100%",
     gap: 8,
     marginBottom: 14,
     paddingBottom: 14,
@@ -1505,34 +2025,32 @@ const styles = StyleSheet.create({
   },
   ocrDebugWrap: {
     marginTop: 2,
-    gap: 8
+    gap: 6
   },
-  ocrDebugToggle: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "#e0edff"
-  },
-  ocrDebugToggleText: {
-    color: "#1d4ed8",
+  ocrSourceHint: {
     fontSize: 12,
-    fontWeight: "600"
+    color: "#64748b"
   },
-  ocrDebugText: {
+  ocrSelectableScroll: {
+    maxHeight: 220,
     minHeight: 120,
     borderColor: "#b7d4fb",
     borderWidth: 1,
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
     backgroundColor: "#f8fbff",
+    paddingHorizontal: 10,
+    paddingVertical: 8
+  },
+  ocrSelectableText: {
     color: "#163d7a",
-    textAlignVertical: "top"
+    fontSize: 14,
+    lineHeight: 22
   },
   classPickerWrap: {
-    width: 76,
-    height: 34,
+    alignSelf: "stretch",
+    width: "100%",
+    minWidth: 0,
+    height: 36,
     borderRadius: 999,
     borderColor: "#bfdbfe",
     borderWidth: 1,
@@ -1544,7 +2062,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 10
+    paddingHorizontal: 6
+  },
+  parseClassPickerLabel: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 4
   },
   classLabelText: {
     color: "#1d4ed8",
@@ -1689,6 +2212,162 @@ const styles = StyleSheet.create({
   manageContent: {
     gap: 12,
     paddingBottom: 24
+  },
+  settingsScrollContent: {
+    gap: 12,
+    paddingBottom: 32
+  },
+  settingsFieldInput: {
+    borderWidth: 1,
+    borderColor: "#b7d4fb",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: "#f4f8ff",
+    color: "#163d7a"
+  },
+  settingsOcrPickerWrap: {
+    width: "100%",
+    alignSelf: "stretch",
+    minHeight: 36,
+    borderRadius: 999,
+    borderColor: "#bfdbfe",
+    borderWidth: 1,
+    overflow: "hidden",
+    backgroundColor: "#dbeafe",
+    justifyContent: "center"
+  },
+  settingsOcrScopePickerWrap: {
+    minHeight: 44,
+    paddingVertical: 4
+  },
+  settingsScopeDisplayRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 10,
+    gap: 8
+  },
+  settingsScopePickerLabel: {
+    flex: 1
+  },
+  settingsRuleListSection: {
+    marginTop: 14,
+    gap: 0
+  },
+  ruleColSource: {
+    flex: 1.35,
+    minWidth: 56
+  },
+  ruleColContent: {
+    flex: 1,
+    minWidth: 48
+  },
+  ruleColClass: {
+    width: 40
+  },
+  ruleColScope: {
+    flex: 1,
+    minWidth: 56
+  },
+  ruleListRowPress: {
+    marginBottom: 6,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(29,78,216,0.08)"
+  },
+  ruleListRowPressPressed: {
+    opacity: 0.88
+  },
+  ruleListCellBox: {
+    height: 44,
+    borderColor: "#b7d4fb",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    backgroundColor: "#f4f8ff",
+    justifyContent: "center",
+    overflow: "hidden"
+  },
+  ruleListCellText: {
+    color: "#163d7a",
+    fontSize: 12,
+    lineHeight: 16
+  },
+  ocrRuleModalKeyboard: {
+    width: "100%",
+    maxWidth: 420,
+    alignSelf: "center",
+    zIndex: 2,
+    maxHeight: "88%"
+  },
+  ocrRuleModalSheet: {
+    backgroundColor: "white",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+    maxHeight: "100%"
+  },
+  ocrRuleModalScroll: {
+    gap: 8,
+    paddingBottom: 12
+  },
+  ocrRuleModalTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#163d7a",
+    marginBottom: 4
+  },
+  ocrRuleModalActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+    gap: 10,
+    flexWrap: "wrap"
+  },
+  ocrRuleModalActionsSpacer: {
+    flex: 1,
+    minWidth: 8
+  },
+  ocrRuleModalActionsRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  ocrRuleModalDeleteButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 4
+  },
+  ocrRuleModalDeleteText: {
+    color: "#dc2626",
+    fontWeight: "600",
+    fontSize: 14
+  },
+  ocrRuleModalSecondaryButton: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: "#f8fbff"
+  },
+  ocrRuleModalSecondaryText: {
+    color: "#1d4ed8",
+    fontWeight: "600",
+    fontSize: 14
+  },
+  ocrRuleModalPrimaryButton: {
+    borderRadius: 8,
+    backgroundColor: "#2563eb",
+    paddingVertical: 10,
+    paddingHorizontal: 18
+  },
+  ocrRuleModalPrimaryText: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: 14
   },
   settingsLabel: {
     color: "#163d7a",
