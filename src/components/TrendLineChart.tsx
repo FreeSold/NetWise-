@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
-import Svg, { Circle, Line, Path, Rect, Text as SvgText } from "react-native-svg";
+import Svg, { Circle, Line, Path, Rect } from "react-native-svg";
 import type { TrendPoint } from "../storage/assetHistoryDb";
 
 type Props = {
@@ -8,8 +8,14 @@ type Props = {
 };
 
 const DISPLAY_POINT_CAP = 10;
+/** 拖动时折线路径向两侧多取的点数，减轻贴边时的截断感 */
+const PAN_LINE_BUFFER = 10;
 /** 横向拖动约多少像素视为平移 1 个时点 */
 const PAN_PX_PER_STEP = 38;
+/** 底部日期刻度占位宽度（居中），避免贴左右边界被裁切 */
+const X_LABEL_SLOT_W = 44;
+/** 日期条相对绘图区左右多露出的安全边距 */
+const X_LABEL_STRIP_GUTTER = 14;
 
 function buildPath(points: Array<{ x: number; y: number }>): string {
   if (!points.length) {
@@ -158,15 +164,22 @@ export function TrendLineChart({ points }: Props) {
 
   const maxWindowStart = Math.max(0, points.length - DISPLAY_POINT_CAP);
   const [windowStart, setWindowStart] = useState(0);
+  /** 非 null：拖动中，Y 轴/横向网格/色带冻结为该窗起点；折线用预加载宽路径只平移，不重算 Path */
+  const [axisFreezeStart, setAxisFreezeStart] = useState<number | null>(null);
   const userPannedRef = useRef(false);
   const pointsLenRef = useRef(0);
   const pointsRef = useRef(points);
   pointsRef.current = points;
   const windowStartRef = useRef(windowStart);
   windowStartRef.current = windowStart;
-  /** 本次手势开始时的 windowStart，用于把累计位移映射为窗口索引 + 步内平移 */
+  /** 本次手势开始时的 windowStart，松手时与累计位移一起换算最终窗 */
   const dragOriginWindowRef = useRef(0);
   const dragX = useRef(new Animated.Value(0)).current;
+  /** 供 PanResponder 读取当前布局（plotW、冻结窗等） */
+  const latestComputedRef = useRef({
+    plotW: 1,
+    axisFreezeStart: null as number | null
+  });
 
   useLayoutEffect(() => {
     const len = points.length;
@@ -190,9 +203,9 @@ export function TrendLineChart({ points }: Props) {
       return [];
     }
     const maxS = Math.max(0, points.length - DISPLAY_POINT_CAP);
-    const start = Math.min(windowStart, maxS);
+    const start = Math.min(axisFreezeStart !== null ? axisFreezeStart : windowStart, maxS);
     return points.slice(start, start + DISPLAY_POINT_CAP);
-  }, [points, windowStart]);
+  }, [points, windowStart, axisFreezeStart]);
 
   const panResponder = useMemo(
     () =>
@@ -200,7 +213,13 @@ export function TrendLineChart({ points }: Props) {
         onPanResponderGrant: () => {
           setActiveIndex(null);
           dragX.stopAnimation();
-          dragOriginWindowRef.current = windowStartRef.current;
+          const w0 = windowStartRef.current;
+          dragOriginWindowRef.current = w0;
+          const len = pointsRef.current.length;
+          const maxS = Math.max(0, len - DISPLAY_POINT_CAP);
+          if (maxS > 0) {
+            setAxisFreezeStart(w0);
+          }
         },
         onMoveShouldSetPanResponder: (_, g) =>
           Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.05,
@@ -210,51 +229,68 @@ export function TrendLineChart({ points }: Props) {
           if (maxS === 0) {
             return;
           }
-          let dx = g.dx;
-          const w = windowStartRef.current;
-          if (w >= maxS && dx < 0) {
-            dx *= 0.28;
+          const freezeW = latestComputedRef.current.axisFreezeStart;
+          if (freezeW === null) {
+            return;
           }
-          if (w <= 0 && dx > 0) {
-            dx *= 0.28;
+          const plotW = latestComputedRef.current.plotW;
+          const denom = Math.max(1, DISPLAY_POINT_CAP - 1);
+          const plotStep = plotW / denom;
+          const bufStart = Math.max(0, freezeW - PAN_LINE_BUFFER);
+          const bufEnd = Math.min(len, freezeW + DISPLAY_POINT_CAP + PAN_LINE_BUFFER);
+          const j0 = freezeW - bufStart;
+          const jMax = Math.min(maxS, bufEnd - DISPLAY_POINT_CAP) - bufStart;
+          const T0 = -j0 * plotStep;
+          const TMin = -jMax * plotStep;
+          const TMax = 0;
+          const dx = g.dx;
+          let T = T0 + dx;
+          if (T > TMax) {
+            T = TMax + (T - TMax) * 0.28;
           }
-          const origin = dragOriginWindowRef.current;
-          const raw = origin + Math.round(-dx / PAN_PX_PER_STEP);
-          const next = Math.max(0, Math.min(maxS, raw));
-          const visX = dx + (next - origin) * PAN_PX_PER_STEP;
-          dragX.setValue(visX);
-          if (next !== windowStartRef.current) {
-            userPannedRef.current = true;
-            windowStartRef.current = next;
-            setWindowStart(next);
+          if (T < TMin) {
+            T = TMin + (T - TMin) * 0.28;
           }
+          dragX.setValue(T);
         },
-        onPanResponderRelease: () => {
+        onPanResponderRelease: (_, g) => {
           const len = pointsRef.current.length;
           const maxS = Math.max(0, len - DISPLAY_POINT_CAP);
           if (maxS === 0) {
             Animated.spring(dragX, {
               toValue: 0,
-              useNativeDriver: true,
+              useNativeDriver: false,
               friction: 8,
               tension: 160
             }).start();
             return;
           }
-          Animated.spring(dragX, {
-            toValue: 0,
-            useNativeDriver: true,
-            friction: 9,
-            tension: 170
-          }).start();
+          const w0 = dragOriginWindowRef.current;
+          const delta = Math.round(-g.dx / PAN_PX_PER_STEP);
+          if (delta !== 0) {
+            userPannedRef.current = true;
+          }
+          const finalWin = Math.max(0, Math.min(maxS, w0 + delta));
+          dragX.stopAnimation();
+          dragX.setValue(0);
+          setWindowStart(finalWin);
+          setAxisFreezeStart(null);
         },
-        onPanResponderTerminate: () => {
-          Animated.spring(dragX, {
-            toValue: 0,
-            useNativeDriver: true,
-            friction: 9,
-            tension: 170
-          }).start();
+        onPanResponderTerminate: (_, g) => {
+          const len = pointsRef.current.length;
+          const maxS = Math.max(0, len - DISPLAY_POINT_CAP);
+          dragX.stopAnimation();
+          dragX.setValue(0);
+          if (maxS > 0) {
+            const w0 = dragOriginWindowRef.current;
+            const delta = Math.round(-(g?.dx ?? 0) / PAN_PX_PER_STEP);
+            if (delta !== 0) {
+              userPannedRef.current = true;
+            }
+            const finalWin = Math.max(0, Math.min(maxS, w0 + delta));
+            setWindowStart(finalWin);
+            setAxisFreezeStart(null);
+          }
         }
       }),
     [dragX]
@@ -277,7 +313,8 @@ export function TrendLineChart({ points }: Props) {
   }, [displayPoints.length]);
 
   const computed = useMemo(() => {
-    if (!displayPoints.length) {
+    const plotInnerHFallback = Math.max(1, height - paddingY * 2);
+    if (!points.length) {
       return {
         path: "",
         dots: [] as Array<{ x: number; y: number; total: number; date: string }>,
@@ -288,12 +325,46 @@ export function TrendLineChart({ points }: Props) {
         chartLeft: 40,
         chartRight: 0,
         plotW: 1,
+        plotInnerH: plotInnerHFallback,
+        bufferScrollW: 1,
+        frozenScrollInitT: null as number | null,
+        hideXLabels: false,
+        gridX2: 1,
+        yTickLayouts: [] as Array<{ key: string; top: number; label: string }>,
         yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>
       };
     }
-    const values = displayPoints.map((p) => p.total);
-    const dataMin = Math.min(...values);
-    const dataMax = Math.max(...values);
+
+    const maxS = Math.max(0, points.length - DISPLAY_POINT_CAP);
+    const frozen = axisFreezeStart !== null;
+    const axisStartClamped = Math.min(Math.max(0, frozen ? axisFreezeStart! : windowStart), maxS);
+    const lineStartClamped = Math.min(Math.max(0, windowStart), maxS);
+
+    const axisPoints = points.slice(axisStartClamped, axisStartClamped + DISPLAY_POINT_CAP);
+    if (!axisPoints.length) {
+      return {
+        path: "",
+        dots: [] as Array<{ x: number; y: number; total: number; date: string }>,
+        ticks: [] as number[],
+        domainMin: 0,
+        domainMax: 1,
+        leftPad: 40,
+        chartLeft: 40,
+        chartRight: 0,
+        plotW: 1,
+        plotInnerH: plotInnerHFallback,
+        bufferScrollW: 1,
+        frozenScrollInitT: null as number | null,
+        hideXLabels: false,
+        gridX2: 1,
+        yTickLayouts: [] as Array<{ key: string; top: number; label: string }>,
+        yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>
+      };
+    }
+
+    const axisValues = axisPoints.map((p) => p.total);
+    const dataMin = Math.min(...axisValues);
+    const dataMax = Math.max(...axisValues);
     const { ticks, domainMin, domainMax } = buildNiceYTicks(dataMin, dataMax, 5);
     const spread = Math.max(domainMax - domainMin, 1e-9);
 
@@ -302,20 +373,60 @@ export function TrendLineChart({ points }: Props) {
     const chartLeft = leftPad;
     const chartRight = width - rightPad;
     const plotW = Math.max(chartRight - chartLeft, 1);
+    const plotInnerH = Math.max(1, height - paddingY * 2);
+    const denom = Math.max(1, DISPLAY_POINT_CAP - 1);
 
-    const dots = displayPoints.map((item, index) => {
-      const x =
-        displayPoints.length === 1
-          ? plotW / 2
-          : (index * plotW) / (displayPoints.length - 1);
-      const y = paddingY + ((domainMax - item.total) * (height - paddingY * 2)) / spread;
-      return { x, y, total: item.total, date: item.date };
+    let path: string;
+    let dots: Array<{ x: number; y: number; total: number; date: string }>;
+    let bufferScrollW = plotW;
+    let frozenScrollInitT: number | null = null;
+    let hideXLabels = false;
+    let bandW = plotW;
+    let gridX2 = plotW;
+
+    if (frozen) {
+      const freezeW = axisFreezeStart!;
+      const bufStart = Math.max(0, freezeW - PAN_LINE_BUFFER);
+      const bufEnd = Math.min(points.length, freezeW + DISPLAY_POINT_CAP + PAN_LINE_BUFFER);
+      const bufPts = points.slice(bufStart, bufEnd);
+      const M = bufPts.length;
+      const plotStep = plotW / denom;
+      bufferScrollW = Math.max(plotW, M <= 1 ? plotW : (M - 1) * plotStep);
+      bandW = bufferScrollW;
+      gridX2 = bufferScrollW;
+      const bufDots = bufPts.map((item, j) => {
+        const x = M <= 1 ? plotW / 2 : j * plotStep;
+        const y = ((domainMax - item.total) * plotInnerH) / spread;
+        return { x, y, total: item.total, date: item.date };
+      });
+      path = buildPath(bufDots);
+      dots = bufDots;
+      const j0 = freezeW - bufStart;
+      frozenScrollInitT = -(M <= 1 ? 0 : j0 * plotStep);
+      hideXLabels = true;
+    } else {
+      const linePoints = points.slice(lineStartClamped, lineStartClamped + DISPLAY_POINT_CAP);
+      dots = linePoints.map((item, index) => {
+        const x = linePoints.length === 1 ? plotW / 2 : (index * plotW) / denom;
+        const y = ((domainMax - item.total) * plotInnerH) / spread;
+        return { x, y, total: item.total, date: item.date };
+      });
+      path = buildPath(dots);
+    }
+
+    const yBandRects = buildYBandRects(ticks, domainMin, domainMax, 0, bandW, 0, plotInnerH);
+
+    const yTickLayouts = ticks.map((tick, idx) => {
+      const yInner = ((domainMax - tick) * plotInnerH) / spread;
+      return {
+        key: `ytick-lbl-${idx}-${tick}`,
+        top: paddingY + yInner - 5,
+        label: formatYTickLabel(tick)
+      };
     });
 
-    const yBandRects = buildYBandRects(ticks, domainMin, domainMax, 0, plotW, paddingY, height);
-
     return {
-      path: buildPath(dots),
+      path,
       dots,
       ticks,
       domainMin,
@@ -324,9 +435,31 @@ export function TrendLineChart({ points }: Props) {
       chartLeft,
       chartRight,
       plotW,
+      plotInnerH,
+      bufferScrollW,
+      frozenScrollInitT,
+      hideXLabels,
+      gridX2,
+      yTickLayouts,
       yBandRects
     };
-  }, [displayPoints, height, paddingY, rightPad, width]);
+  }, [points, axisFreezeStart, windowStart, height, paddingY, rightPad, width]);
+
+  const frozenPanScrollInitedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (axisFreezeStart !== null && computed.frozenScrollInitT !== null && !frozenPanScrollInitedRef.current) {
+      dragX.setValue(computed.frozenScrollInitT);
+      frozenPanScrollInitedRef.current = true;
+    }
+    if (axisFreezeStart === null) {
+      frozenPanScrollInitedRef.current = false;
+    }
+  }, [axisFreezeStart, computed.frozenScrollInitT, dragX]);
+
+  latestComputedRef.current = {
+    plotW: computed.plotW,
+    axisFreezeStart
+  };
 
   if (!points.length) {
     return (
@@ -357,9 +490,10 @@ export function TrendLineChart({ points }: Props) {
           style={[
             styles.chartPlotClip,
             {
+              top: paddingY,
               left: computed.chartLeft,
               width: computed.plotW,
-              height
+              height: computed.plotInnerH
             }
           ]}
         >
@@ -367,13 +501,13 @@ export function TrendLineChart({ points }: Props) {
           style={[
             styles.chartPlotScroll,
             {
-              width: computed.plotW,
-              height,
+              width: computed.bufferScrollW,
+              height: computed.plotInnerH,
               transform: [{ translateX: dragX }]
             }
           ]}
         >
-          <Svg width={computed.plotW} height={height}>
+          <Svg width={computed.bufferScrollW} height={computed.plotInnerH}>
             {computed.yBandRects.map((band) => (
               <Rect
                 key={band.key}
@@ -387,13 +521,13 @@ export function TrendLineChart({ points }: Props) {
             ))}
             {computed.ticks.map((tick, idx) => {
               const spread = Math.max(computed.domainMax - computed.domainMin, 1e-9);
-              const y = paddingY + ((computed.domainMax - tick) * (height - paddingY * 2)) / spread;
+              const y = ((computed.domainMax - tick) * computed.plotInnerH) / spread;
               return (
                 <Line
                   key={`grid-${idx}-${tick}`}
                   x1={0}
                   y1={y}
-                  x2={computed.plotW}
+                  x2={computed.gridX2}
                   y2={y}
                   stroke="#dbeafe"
                   strokeWidth={1}
@@ -411,23 +545,6 @@ export function TrendLineChart({ points }: Props) {
                 pointerEvents="none"
               />
             ))}
-            {xLabelIndices.map((index) => {
-              const dot = computed.dots[index];
-              if (!dot) {
-                return null;
-              }
-              return (
-                <SvgText
-                  key={`xlabel-${dot.date}-${index}`}
-                  x={dot.x - 18}
-                  y={height - 8}
-                  fontSize="10"
-                  fill="#4f76b3"
-                >
-                  {dot.date.slice(5)}
-                </SvgText>
-              );
-            })}
           </Svg>
           <View style={styles.panLayer} {...panResponder.panHandlers} accessibilityLabel="横向拖动查看历史数据">
             <Pressable style={StyleSheet.absoluteFill} onPress={() => setActiveIndex(null)} accessibilityRole="button" />
@@ -467,7 +584,54 @@ export function TrendLineChart({ points }: Props) {
         </Animated.View>
         </View>
 
-        <View style={[styles.chartAxisOverlay, { width, height }]} pointerEvents="none">
+        {!computed.hideXLabels ? (
+          <View
+            style={[
+              styles.xLabelStripClip,
+              {
+                left: computed.chartLeft - X_LABEL_STRIP_GUTTER,
+                top: height - paddingY + 2,
+                width: computed.plotW + X_LABEL_STRIP_GUTTER * 2,
+                height: Math.max(14, paddingY - 4)
+              }
+            ]}
+          >
+            <Animated.View
+              style={[
+                styles.xLabelStripScroll,
+                {
+                  width: computed.bufferScrollW,
+                  height: Math.max(14, paddingY - 4),
+                  transform: [{ translateX: dragX }]
+                }
+              ]}
+            >
+              {xLabelIndices.map((index) => {
+                const dot = computed.dots[index];
+                if (!dot) {
+                  return null;
+                }
+                const scrollW = computed.bufferScrollW;
+                const rawLeft = dot.x - X_LABEL_SLOT_W / 2;
+                const left = Math.max(0, Math.min(rawLeft, Math.max(0, scrollW - X_LABEL_SLOT_W)));
+                return (
+                  <Text
+                    key={`xlabel-txt-${dot.date}-${index}`}
+                    style={[
+                      styles.xLabelText,
+                      { left, top: 0, width: X_LABEL_SLOT_W, textAlign: "center" }
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {dot.date.slice(5)}
+                  </Text>
+                );
+              })}
+            </Animated.View>
+          </View>
+        ) : null}
+
+        <View style={[styles.chartAxisFrameLayer, { width, height }]} pointerEvents="none">
           <Svg width={width} height={height}>
             <Line
               x1={computed.chartLeft}
@@ -485,23 +649,24 @@ export function TrendLineChart({ points }: Props) {
               stroke="#b7d4fb"
               strokeWidth={1}
             />
-            {computed.ticks.map((tick, idx) => {
-              const spread = Math.max(computed.domainMax - computed.domainMin, 1e-9);
-              const y = paddingY + ((computed.domainMax - tick) * (height - paddingY * 2)) / spread;
-              const label = formatYTickLabel(tick);
-              return (
-                <SvgText
-                  key={`ylabel-fixed-${idx}-${tick}`}
-                  x={Math.max(2, computed.chartLeft - 6 - label.length * 5.2)}
-                  y={y + 4}
-                  fontSize="10"
-                  fill="#4f76b3"
-                >
-                  {label}
-                </SvgText>
-              );
-            })}
           </Svg>
+        </View>
+
+        <View style={[styles.chartYTickLabelsLayer, { width, height }]} pointerEvents="none">
+          {computed.yTickLayouts.map((row) => (
+            <Text
+              key={row.key}
+              style={[
+                styles.yTickLabelText,
+                {
+                  top: row.top,
+                  width: Math.max(24, computed.chartLeft - 6)
+                }
+              ]}
+            >
+              {row.label}
+            </Text>
+          ))}
         </View>
       </View>
       <Text style={styles.rangeHint}>{rangeLabel}</Text>
@@ -521,10 +686,9 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     overflow: "hidden"
   },
-  /** 固定在 Y 轴右缘～右内边距之间，拖动时在此矩形内裁切折线/网格，避免画出坐标框 */
+  /** 轴线围成的绘图区内：左=Y 轴内侧，右=右内边距，上/下=上下轴线 */
   chartPlotClip: {
     position: "absolute",
-    top: 0,
     overflow: "hidden",
     zIndex: 1
   },
@@ -534,12 +698,41 @@ const styles = StyleSheet.create({
     left: 0,
     zIndex: 1
   },
-  chartAxisOverlay: {
+  xLabelStripClip: {
+    position: "absolute",
+    overflow: "hidden",
+    zIndex: 1
+  },
+  xLabelStripScroll: {
+    position: "relative"
+  },
+  xLabelText: {
+    position: "absolute",
+    fontSize: 10,
+    color: "#4f76b3"
+  },
+  /** 仅轴线（竖线+底边），与绘图区分层 */
+  chartAxisFrameLayer: {
     position: "absolute",
     top: 0,
     left: 0,
     zIndex: 2,
     elevation: 2
+  },
+  /** Y 轴刻度数字，独立图层 */
+  chartYTickLabelsLayer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    zIndex: 3,
+    elevation: 3
+  },
+  yTickLabelText: {
+    position: "absolute",
+    left: 0,
+    fontSize: 10,
+    color: "#4f76b3",
+    textAlign: "right"
   },
   panLayer: {
     ...StyleSheet.absoluteFillObject,
