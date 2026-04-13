@@ -1,3 +1,6 @@
+# Kotlin/Gradle build caches (session locks; do not commit)
+android/.kotlin/
+
 node_modules/
 .expo/
 .expo-shared/
