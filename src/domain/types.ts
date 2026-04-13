@@ -26,14 +26,17 @@ export interface ParsedAsset {
   ruleSummary?: string;
 }
 
-export type OcrRuleScreenScope =
+/** 内置页面类型 + 「不限」等；自定义识别模块页为 `custom_module:` + 模块 id */
+export type BuiltinOcrRuleScreenScope =
   | "any"
   | "unknown"
-  | "cmb_property"
-  | "cmb_wealth"
-  | "alipay_wealth"
-  | "alipay_fund"
+  | "alipay"
+  | "cmb"
   | "wechat_wallet";
+
+export type OcrRuleScreenScope = BuiltinOcrRuleScreenScope | `custom_module:${string}`;
+
+export const OCR_CUSTOM_MODULE_SCOPE_PREFIX = "custom_module:" as const;
 
 export type OcrCustomRule = {
   id: string;
@@ -53,3 +56,11 @@ export interface ParseResult {
   reportedTotal?: number;
   warnings: string[];
 }
+
+/** 用户自定义「识别模块」：按关键词在当日 OCR 中同时命中（去空白后子串）时，将该次导入资产总额计入该模块趋势 */
+export type CustomRecognitionModule = {
+  id: string;
+  displayName: string;
+  /** 须全部出现在合并 OCR 中的片段（保存为分割后的词/词组） */
+  keywords: string[];
+};

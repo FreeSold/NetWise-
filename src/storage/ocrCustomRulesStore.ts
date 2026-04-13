@@ -1,17 +1,41 @@
 import * as FileSystem from "expo-file-system";
-import type { OcrCustomRule, OcrRuleScreenScope } from "../domain/types";
+import { OCR_CUSTOM_MODULE_SCOPE_PREFIX, type OcrCustomRule, type OcrRuleScreenScope } from "../domain/types";
 
 const RULES_FILE = "netwise-ocr-custom-rules.json";
 
-const VALID_SCOPES = new Set<OcrRuleScreenScope>([
+/** 旧版按理财/基金、财产/理财拆分的 scope，读入后合并为 alipay / cmb */
+const LEGACY_ALIPAY_SCOPES = new Set(["alipay_wealth", "alipay_fund"]);
+const LEGACY_CMB_SCOPES = new Set(["cmb_property", "cmb_wealth"]);
+
+const VALID_BUILTIN_SCOPES = new Set<string>([
   "any",
   "unknown",
-  "cmb_property",
-  "cmb_wealth",
-  "alipay_wealth",
-  "alipay_fund",
-  "wechat_wallet"
+  "alipay",
+  "cmb",
+  "wechat_wallet",
+  ...LEGACY_ALIPAY_SCOPES,
+  ...LEGACY_CMB_SCOPES
 ]);
+
+export function normalizeOcrRuleScreenScope(scope: string | undefined): OcrRuleScreenScope | undefined {
+  if (scope === undefined) {
+    return undefined;
+  }
+  if (LEGACY_ALIPAY_SCOPES.has(scope)) {
+    return "alipay";
+  }
+  if (LEGACY_CMB_SCOPES.has(scope)) {
+    return "cmb";
+  }
+  return scope as OcrRuleScreenScope;
+}
+
+function isValidScreenScope(s: string): s is OcrRuleScreenScope {
+  if (VALID_BUILTIN_SCOPES.has(s)) {
+    return true;
+  }
+  return s.startsWith(OCR_CUSTOM_MODULE_SCOPE_PREFIX) && s.length > OCR_CUSTOM_MODULE_SCOPE_PREFIX.length;
+}
 
 function getRulesUri(): string {
   if (!FileSystem.documentDirectory) {
@@ -32,7 +56,14 @@ export async function loadOcrCustomRules(): Promise<OcrCustomRule[]> {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isValidRule);
+    return parsed.filter(isValidRule).map((r) => {
+      const rule = r as OcrCustomRule;
+      const nextScope = normalizeOcrRuleScreenScope(rule.screenScope);
+      if (nextScope === rule.screenScope) {
+        return rule;
+      }
+      return { ...rule, screenScope: nextScope };
+    });
   } catch {
     return [];
   }
@@ -55,7 +86,7 @@ function isValidRule(item: unknown): item is OcrCustomRule {
     return false;
   }
   if (r.screenScope !== undefined) {
-    if (typeof r.screenScope !== "string" || !VALID_SCOPES.has(r.screenScope as OcrRuleScreenScope)) {
+    if (typeof r.screenScope !== "string" || !isValidScreenScope(r.screenScope)) {
       return false;
     }
   }

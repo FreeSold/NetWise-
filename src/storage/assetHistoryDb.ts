@@ -27,6 +27,10 @@ type SnapshotRecord = {
   importDate: string;
   imageHashes: string[];
   assets: ParsedAsset[];
+  /** 与 imageHashes 同序的 OCR 全文，用于自定义识别模块匹配；旧数据无此字段 */
+  ocrTexts?: string[];
+  /** 内置模块测试折线数据，可通过 clearSeedTestData / clearAllData 清除 */
+  seedTest?: boolean;
 };
 
 type StorePayload = {
@@ -59,7 +63,29 @@ export async function initAssetHistoryDb(): Promise<void> {
   await writeStore({ snapshots: [] });
 }
 
-export async function saveImportSnapshot(imageHashes: string[], assets: ParsedAsset[]): Promise<SaveResult> {
+function compactOcrSnippet(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
+function buildSnapshotOcrCompact(ocrTexts: string[] | undefined): string {
+  if (!ocrTexts?.length) {
+    return "";
+  }
+  return ocrTexts.map((t) => compactOcrSnippet(t)).join("");
+}
+
+function keywordsAllMatchInCompactOcr(compactOcr: string, compactKeywords: string[]): boolean {
+  if (!compactOcr || !compactKeywords.length) {
+    return false;
+  }
+  return compactKeywords.every((k) => k.length > 0 && compactOcr.includes(k));
+}
+
+export async function saveImportSnapshot(
+  imageHashes: string[],
+  assets: ParsedAsset[],
+  ocrTexts?: string[]
+): Promise<SaveResult> {
   const date = getTodayDate();
   const uniqueHashes = [...new Set(imageHashes)].filter(Boolean);
   if (!uniqueHashes.length) {
@@ -77,12 +103,19 @@ export async function saveImportSnapshot(imageHashes: string[], assets: ParsedAs
     return { saved: false, date };
   }
 
+  let ocrForNew: string[] | undefined;
+  if (ocrTexts && ocrTexts.length && newHashes.length) {
+    const ocrByHash = new Map(uniqueHashes.map((h, i) => [h, ocrTexts[i] ?? ""]));
+    ocrForNew = newHashes.map((h) => ocrByHash.get(h) ?? "");
+  }
+
   const nextId = store.snapshots.length ? Math.max(...store.snapshots.map((item) => item.id)) + 1 : 1;
   store.snapshots.push({
     id: nextId,
     importDate: date,
     imageHashes: newHashes,
-    assets
+    assets,
+    ...(ocrForNew ? { ocrTexts: ocrForNew } : {})
   });
   await writeStore(store);
 
@@ -129,6 +162,41 @@ export async function queryPlatformTrendSeries(platform: PlatformTrendFilter): P
     .map(([date, total]) => ({ date, total: roundMoney(total) }));
 }
 
+/** 自定义识别模块：当日快照合并 OCR 同时包含全部关键词时，将该快照资产总额计入趋势 */
+export async function queryCustomRecognitionTrendSeries(keywords: string[]): Promise<TrendPoint[]> {
+  const compactKws = keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
+  if (!compactKws.length) {
+    return [];
+  }
+
+  const store = await readStore();
+  const totalsByDate = new Map<string, number>();
+
+  for (const snapshot of store.snapshots) {
+    if (!snapshot.assets.length) {
+      continue;
+    }
+    const compact = buildSnapshotOcrCompact(snapshot.ocrTexts);
+    if (!keywordsAllMatchInCompactOcr(compact, compactKws)) {
+      continue;
+    }
+    const snapshotTotal = snapshot.assets.reduce(
+      (sum, asset) => sum + (Number.isFinite(asset.amount) ? asset.amount : 0),
+      0
+    );
+    if (snapshotTotal > 0) {
+      totalsByDate.set(
+        snapshot.importDate,
+        roundMoney((totalsByDate.get(snapshot.importDate) ?? 0) + snapshotTotal)
+      );
+    }
+  }
+
+  return [...totalsByDate.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, total]) => ({ date, total: roundMoney(total) }));
+}
+
 export async function queryDailySummary(date = getTodayDate()): Promise<DailySummary> {
   const store = await readStore();
   const byClass = emptyByClassTotals();
@@ -154,6 +222,98 @@ export async function clearCurrentDateData(date = getTodayDate()): Promise<void>
 
 export async function clearAllData(): Promise<void> {
   await writeStore({ snapshots: [] });
+}
+
+function formatLocalYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function buildSeedTestAsset(name: string, source: ParsedAsset["source"], amount: number): ParsedAsset {
+  return {
+    name,
+    amount,
+    currency: "CNY",
+    assetClass: "cash",
+    source,
+    confidence: 1,
+    recognizedLabel: name,
+    ruleSummary: `${name}  ${amount.toFixed(2)}  测试`
+  };
+}
+
+const SEED_TEST_DAYS = 20;
+const SEED_TEST_STEP = 10000;
+
+/** 为支付宝 / 招行 / 微信三个内置趋势各写入 20 个时点：金额从 0 元起每档 +10000。会先移除已存在的测试快照再写入。 */
+export async function seedDefaultModuleTestData(): Promise<{ snapshotsWritten: number }> {
+  const store = await readStore();
+  store.snapshots = store.snapshots.filter((s) => !s.seedTest);
+  let nextId = store.snapshots.length ? Math.max(...store.snapshots.map((item) => item.id)) + 1 : 1;
+
+  const anchor = new Date();
+  anchor.setHours(12, 0, 0, 0);
+
+  for (let j = 0; j < SEED_TEST_DAYS; j += 1) {
+    const d = new Date(anchor);
+    d.setDate(d.getDate() - (SEED_TEST_DAYS - 1 - j));
+    const importDate = formatLocalYmd(d);
+    const amount = j * SEED_TEST_STEP;
+    const id = nextId;
+    nextId += 1;
+    store.snapshots.push({
+      id,
+      importDate,
+      imageHashes: [`seed-netwise-default-mod-${id}`],
+      assets: [
+        buildSeedTestAsset("测试·支付宝", "alipay_wealth", amount),
+        buildSeedTestAsset("测试·招商银行", "cmb_property", amount),
+        buildSeedTestAsset("测试·微信", "wechat_wallet", amount)
+      ],
+      seedTest: true
+    });
+  }
+
+  await writeStore(store);
+  return { snapshotsWritten: SEED_TEST_DAYS };
+}
+
+/** 仅删除带 seedTest 标记的快照，不影响真实导入记录。 */
+export async function clearSeedTestData(): Promise<number> {
+  const store = await readStore();
+  const before = store.snapshots.length;
+  store.snapshots = store.snapshots.filter((s) => !s.seedTest);
+  await writeStore(store);
+  return before - store.snapshots.length;
+}
+
+const DEV_CLIENT_SEED_MARKER = "netwise-dev-client-seed-once.flag";
+
+function isReactNativeDevBundle(): boolean {
+  return typeof __DEV__ !== "undefined" && __DEV__;
+}
+
+/**
+ * 开发调试（Metro / dev client）时：若本机从未写过标记文件，则自动写入内置模块测试数据一次。
+ * Release APK 中 __DEV__ 为 false，不会执行。
+ * 与真机 APK 的数据互不共享（模拟器与手机、或不同包名实例各自一份存储）。
+ */
+export async function ensureDevClientSeedTestDataOnce(): Promise<boolean> {
+  if (!isReactNativeDevBundle() || !FileSystem.documentDirectory) {
+    return false;
+  }
+  const markerUri = `${FileSystem.documentDirectory}${DEV_CLIENT_SEED_MARKER}`;
+  const info = await FileSystem.getInfoAsync(markerUri);
+  if (info.exists) {
+    return false;
+  }
+  await seedDefaultModuleTestData();
+  await FileSystem.writeAsStringAsync(markerUri, new Date().toISOString(), {
+    encoding: FileSystem.EncodingType.UTF8
+  });
+  return true;
 }
 
 async function readAllSnapshots(): Promise<Array<{ date: string; assets: ParsedAsset[] }>> {

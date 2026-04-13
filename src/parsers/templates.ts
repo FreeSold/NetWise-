@@ -1,4 +1,13 @@
-import type { OcrCustomRule, OcrRuleScreenScope, ParseResult, ParsedAsset, ScreenType } from "../domain/types";
+import {
+  OCR_CUSTOM_MODULE_SCOPE_PREFIX,
+  type CustomRecognitionModule,
+  type OcrCustomRule,
+  type OcrRuleScreenScope,
+  type ParseResult,
+  type ParsedAsset,
+  type ScreenType
+} from "../domain/types";
+import { normalizeOcrRuleScreenScope } from "../storage/ocrCustomRulesStore";
 import { buildRuleSummary, parseMoney, safeAsset } from "./shared";
 
 type Template = {
@@ -165,25 +174,52 @@ function firstNumberAfterAnchorInCompact(compactLine: string, anchorCompact: str
   return parseMoney(m[0]);
 }
 
-function ruleScreenScopeAllows(rule: OcrCustomRule, detectedScreen: ParseResult["screenType"]): boolean {
-  const scope: OcrRuleScreenScope = rule.screenScope ?? "any";
+function ruleScreenScopeAllows(
+  rule: OcrCustomRule,
+  detectedScreen: ParseResult["screenType"],
+  compactOcr: string,
+  customModuleById: Map<string, CustomRecognitionModule>
+): boolean {
+  const scope: OcrRuleScreenScope =
+    normalizeOcrRuleScreenScope(rule.screenScope) ?? (rule.screenScope ?? "any");
   if (scope === "any") {
     return true;
+  }
+  if (typeof scope === "string" && scope.startsWith(OCR_CUSTOM_MODULE_SCOPE_PREFIX)) {
+    const moduleId = scope.slice(OCR_CUSTOM_MODULE_SCOPE_PREFIX.length);
+    const mod = customModuleById.get(moduleId);
+    if (!mod?.keywords.length) {
+      return false;
+    }
+    const compactKws = mod.keywords.map((k) => compactForMatch(k.trim())).filter(Boolean);
+    return compactKws.length > 0 && compactKws.every((k) => compactOcr.includes(k));
+  }
+  if (scope === "alipay") {
+    return detectedScreen === "alipay_wealth" || detectedScreen === "alipay_fund";
+  }
+  if (scope === "cmb") {
+    return detectedScreen === "cmb_property" || detectedScreen === "cmb_wealth";
   }
   return scope === detectedScreen;
 }
 
-function parseCustomRules(raw: string, rules: OcrCustomRule[], detectedScreen: ParseResult["screenType"]): ParsedAsset[] {
+function parseCustomRules(
+  raw: string,
+  rules: OcrCustomRule[],
+  detectedScreen: ParseResult["screenType"],
+  customRecognitionModules: CustomRecognitionModule[]
+): ParsedAsset[] {
   if (!rules.length) {
     return [];
   }
   const compactOcr = compactForMatch(raw);
+  const customModuleById = new Map(customRecognitionModules.map((m) => [m.id, m]));
   const lines = toLines(raw);
   const linesToScan = lines.length > 0 ? lines : [raw];
   const assets: ParsedAsset[] = [];
 
   for (const rule of rules) {
-    if (!ruleScreenScopeAllows(rule, detectedScreen)) {
+    if (!ruleScreenScopeAllows(rule, detectedScreen, compactOcr, customModuleById)) {
       continue;
     }
     const anchor = compactForMatch(rule.sourceSnippet.trim());
@@ -375,11 +411,15 @@ function parseReportedTotal(lines: string[]): number | undefined {
   return undefined;
 }
 
-export function parseOcrText(raw: string, customRules: OcrCustomRule[] = []): ParseResult {
+export function parseOcrText(
+  raw: string,
+  customRules: OcrCustomRule[] = [],
+  customRecognitionModules: CustomRecognitionModule[] = []
+): ParseResult {
   const compactText = raw.replace(/\s+/g, "");
   const lines = toLines(raw);
   const screenType = detectScreenType(compactText);
-  const customAssets = parseCustomRules(raw, customRules, screenType);
+  const customAssets = parseCustomRules(raw, customRules, screenType, customRecognitionModules);
 
   if (screenType === "unknown") {
     const warnings: string[] = [];

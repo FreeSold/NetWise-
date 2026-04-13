@@ -58,12 +58,19 @@ function main() {
   // eslint-disable-next-line no-console
   console.log(`已更新：versionCode ${oldCode} → ${newCode}，versionName ${oldName} → ${newName}`);
 
-  const gradleCmd = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
-  execSync(`${gradleCmd} assembleRelease`, {
+  const isWin = process.platform === "win32";
+  const gradleCmd = isWin ? "gradlew.bat" : "./gradlew";
+  // Windows 默认代码页常为 GBK：Gradle 富文本进度条与中文日志易乱码。先切 UTF-8，再用纯文本控制台。
+  const winPrefix = isWin ? "chcp 65001 >nul && " : "";
+  const gradleArgs = "assembleRelease --console=plain";
+  execSync(`${winPrefix}${gradleCmd} ${gradleArgs}`, {
     cwd: path.join(root, "android"),
     stdio: "inherit",
     shell: true,
-    env: process.env
+    env: {
+      ...process.env,
+      JAVA_TOOL_OPTIONS: [process.env.JAVA_TOOL_OPTIONS, "-Dfile.encoding=UTF-8"].filter(Boolean).join(" ")
+    }
   });
 }
 

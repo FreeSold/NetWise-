@@ -7,7 +7,16 @@ import * as ImagePicker from "expo-image-picker";
 import { Picker } from "@react-native-picker/picker";
 import Slider from "@react-native-community/slider";
 import { Alert, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
-import type { AssetClass, OcrCustomRule, OcrRuleScreenScope, ParsedAsset, ParseResult } from "./src/domain/types";
+import {
+  OCR_CUSTOM_MODULE_SCOPE_PREFIX,
+  type AssetClass,
+  type BuiltinOcrRuleScreenScope,
+  type CustomRecognitionModule,
+  type OcrCustomRule,
+  type OcrRuleScreenScope,
+  type ParsedAsset,
+  type ParseResult
+} from "./src/domain/types";
 import { TrendLineChart } from "./src/components/TrendLineChart";
 import { recognizeTextFromImage } from "./src/ocr/ocrSpace";
 import { buildRuleSummary, formatDisplayAmount } from "./src/parsers/shared";
@@ -25,17 +34,23 @@ import {
 import {
   clearAllData,
   clearCurrentDateData,
+  clearSeedTestData,
   type DailySummary,
+  ensureDevClientSeedTestDataOnce,
   initAssetHistoryDb,
+  queryCustomRecognitionTrendSeries,
   queryPlatformTrendSeries,
   queryDailySummary,
   queryTrendSeries,
   type PlatformTrendFilter,
   saveImportSnapshot,
+  seedDefaultModuleTestData,
   type TrendFilter,
   type TrendPoint
 } from "./src/storage/assetHistoryDb";
-import { loadOcrCustomRules, saveOcrCustomRules } from "./src/storage/ocrCustomRulesStore";
+import { loadCustomRecognitionModules, saveCustomRecognitionModules } from "./src/storage/customRecognitionModulesStore";
+import { loadOcrCustomRules, normalizeOcrRuleScreenScope, saveOcrCustomRules } from "./src/storage/ocrCustomRulesStore";
+import { splitRecognitionKeywords } from "./src/utils/splitRecognitionKeywords";
 
 const ASSET_CLASS_ORDER: AssetClass[] = ["cash", "fund", "insurance", "stock", "wealth_management"];
 const ASSET_CLASS_LABEL: Record<AssetClass, string> = {
@@ -76,25 +91,34 @@ const SCREEN_TYPE_LABEL: Record<ParseResult["screenType"], string> = {
   unknown: "未识别页面"
 };
 
-const OCR_RULE_SCOPE_ORDER: OcrRuleScreenScope[] = [
+const OCR_RULE_SCOPE_ORDER: BuiltinOcrRuleScreenScope[] = [
   "any",
   "unknown",
-  "cmb_property",
-  "cmb_wealth",
-  "alipay_wealth",
-  "alipay_fund",
+  "cmb",
+  "alipay",
   "wechat_wallet"
 ];
 
-const OCR_RULE_SCOPE_LABEL: Record<OcrRuleScreenScope, string> = {
+const OCR_RULE_SCOPE_LABEL: Record<BuiltinOcrRuleScreenScope, string> = {
   any: "不限页面（每张图都尝试）",
   unknown: "仅「未识别页面」时",
-  cmb_property: "仅招商银行财产页",
-  cmb_wealth: "仅招商银行理财页",
-  alipay_wealth: "仅支付宝理财页",
-  alipay_fund: "仅支付宝基金页",
+  cmb: "仅招商银行",
+  alipay: "仅支付宝",
   wechat_wallet: "仅微信钱包页"
 };
+
+function formatOcrRuleScopeLabel(
+  scope: OcrRuleScreenScope | undefined,
+  customModules: CustomRecognitionModule[]
+): string {
+  const s: OcrRuleScreenScope = normalizeOcrRuleScreenScope(scope) ?? (scope ?? "any");
+  if (typeof s === "string" && s.startsWith(OCR_CUSTOM_MODULE_SCOPE_PREFIX)) {
+    const id = s.slice(OCR_CUSTOM_MODULE_SCOPE_PREFIX.length);
+    const m = customModules.find((x) => x.id === id);
+    return m ? `仅「${m.displayName}」` : "自定义模块（已删除）";
+  }
+  return OCR_RULE_SCOPE_LABEL[s as BuiltinOcrRuleScreenScope];
+}
 
 type EditableAssetItem = ParsedAsset & {
   imageUri: string;
@@ -136,6 +160,7 @@ export default function App() {
   const [previewIndex, setPreviewIndex] = useState(0);
   const [clearMode, setClearMode] = useState<"today" | "all" | null>(null);
   const [clearAllStep2, setClearAllStep2] = useState(false);
+  const [seedTestBusy, setSeedTestBusy] = useState(false);
   const [dbReady, setDbReady] = useState(false);
   const [dbInitError, setDbInitError] = useState<string | null>(null);
   const [securityReady, setSecurityReady] = useState(false);
@@ -173,12 +198,27 @@ export default function App() {
   const [ruleDraftScope, setRuleDraftScope] = useState<OcrRuleScreenScope>("any");
   const [ocrRuleModalVisible, setOcrRuleModalVisible] = useState(false);
   const [ocrRuleEditingId, setOcrRuleEditingId] = useState<string | null>(null);
+  const [customRecognitionModules, setCustomRecognitionModules] = useState<CustomRecognitionModule[]>([]);
+  const [hiddenCustomModuleIds, setHiddenCustomModuleIds] = useState<string[]>([]);
+  const [customModuleTrendPoints, setCustomModuleTrendPoints] = useState<Record<string, TrendPoint[]>>({});
+  const [customModuleWizardVisible, setCustomModuleWizardVisible] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardUri, setWizardUri] = useState<string | null>(null);
+  const [wizardOcrText, setWizardOcrText] = useState("");
+  const [wizardKeywordsText, setWizardKeywordsText] = useState("");
+  const [wizardModuleName, setWizardModuleName] = useState("");
+  const [wizardOcrExpanded, setWizardOcrExpanded] = useState(false);
+  const [wizardOcrLoading, setWizardOcrLoading] = useState(false);
+  const [wizardError, setWizardError] = useState<string | null>(null);
+  const [customModuleNotice, setCustomModuleNotice] = useState<string | null>(null);
 
   const cashAmount = dailySummary.byClass.cash;
   const fundAmount = dailySummary.byClass.fund;
   const insuranceAmount = dailySummary.byClass.insurance;
   const cardBackgroundColor = `rgba(255,255,255,${Math.max(0.3, Math.min(1, cardOpacityPercent / 100))})`;
   const hiddenPlatformModules = PLATFORM_TREND_ORDER.filter((platform) => !visiblePlatformModules.includes(platform));
+  const visibleCustomRecognitionModules = customRecognitionModules.filter((m) => !hiddenCustomModuleIds.includes(m.id));
+  const hiddenCustomRecognitionModules = customRecognitionModules.filter((m) => hiddenCustomModuleIds.includes(m.id));
   const currentImageHashes = importedImageMetas.map((item) => item.hash);
 
   useEffect(() => {
@@ -244,6 +284,48 @@ export default function App() {
     })();
   }, [appUnlocked]);
 
+  useEffect(() => {
+    if (!appUnlocked) {
+      return;
+    }
+    void (async () => {
+      try {
+        const { modules, hiddenIds } = await loadCustomRecognitionModules();
+        setCustomRecognitionModules(modules);
+        setHiddenCustomModuleIds(hiddenIds);
+        setCustomModuleNotice(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "自定义模块加载失败";
+        setCustomModuleNotice(message);
+      }
+    })();
+  }, [appUnlocked]);
+
+  useEffect(() => {
+    if (!dbReady || !appUnlocked) {
+      return;
+    }
+    void refreshTrendData(trendFilter);
+  }, [dbReady, appUnlocked, trendFilter, customRecognitionModules.length]);
+
+  useEffect(() => {
+    if (!dbReady || !appUnlocked) {
+      return;
+    }
+    void (async () => {
+      try {
+        const seeded = await ensureDevClientSeedTestDataOnce();
+        if (seeded) {
+          await refreshTrendData(trendFilter);
+          const summary = await queryDailySummary();
+          setDailySummary(summary);
+        }
+      } catch (error) {
+        console.warn("DEV_CLIENT_SEED_TEST_DATA_FAILED", error);
+      }
+    })();
+  }, [dbReady, appUnlocked, trendFilter]);
+
   async function computeImageHash(uri: string): Promise<string> {
     const base64Payload = await FileSystem.readAsStringAsync(uri, {
       encoding: FileSystem.EncodingType.Base64
@@ -288,11 +370,20 @@ export default function App() {
   }
 
   async function refreshTrendData(filter: TrendFilter) {
-    const [mainPoints, alipayPoints, cmbPoints, wechatPoints] = await Promise.all([
+    const [mainPoints, alipayPoints, cmbPoints, wechatPoints, customPts] = await Promise.all([
       queryTrendSeries(filter),
       queryPlatformTrendSeries("alipay"),
       queryPlatformTrendSeries("cmb"),
-      queryPlatformTrendSeries("wechat")
+      queryPlatformTrendSeries("wechat"),
+      loadCustomRecognitionModules().then(async ({ modules }) => {
+        const pts: Record<string, TrendPoint[]> = {};
+        await Promise.all(
+          modules.map(async (m) => {
+            pts[m.id] = await queryCustomRecognitionTrendSeries(m.keywords);
+          })
+        );
+        return pts;
+      })
     ]);
     setTrendPoints(mainPoints);
     setPlatformTrendPoints({
@@ -300,6 +391,7 @@ export default function App() {
       cmb: cmbPoints,
       wechat: wechatPoints
     });
+    setCustomModuleTrendPoints(customPts);
   }
 
   function updateAssetName(localId: string, name: string) {
@@ -541,6 +633,166 @@ export default function App() {
     setVisiblePlatformModules((prev) => prev.filter((item) => item !== platform));
   }
 
+  async function moveCustomModuleToHidden(moduleId: string) {
+    const loaded = await loadCustomRecognitionModules();
+    const nextHidden = loaded.hiddenIds.includes(moduleId) ? loaded.hiddenIds : [...loaded.hiddenIds, moduleId];
+    setHiddenCustomModuleIds(nextHidden);
+    await saveCustomRecognitionModules({ modules: loaded.modules, hiddenIds: nextHidden });
+  }
+
+  async function moveCustomModuleToVisible(moduleId: string) {
+    const loaded = await loadCustomRecognitionModules();
+    const nextHidden = loaded.hiddenIds.filter((id) => id !== moduleId);
+    setHiddenCustomModuleIds(nextHidden);
+    await saveCustomRecognitionModules({ modules: loaded.modules, hiddenIds: nextHidden });
+  }
+
+  function resetCustomModuleWizard() {
+    setWizardStep(1);
+    setWizardUri(null);
+    setWizardOcrText("");
+    setWizardKeywordsText("");
+    setWizardModuleName("");
+    setWizardOcrExpanded(false);
+    setWizardOcrLoading(false);
+    setWizardError(null);
+  }
+
+  function openCustomModuleWizard() {
+    resetCustomModuleWizard();
+    setCustomModuleWizardVisible(true);
+  }
+
+  function closeCustomModuleWizard() {
+    setCustomModuleWizardVisible(false);
+    resetCustomModuleWizard();
+  }
+
+  async function wizardPickSingleFromGallery() {
+    setWizardError(null);
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setWizardError("没有相册权限，请在系统设置中允许访问相册。");
+      return;
+    }
+    const picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: false,
+      allowsEditing: false,
+      quality: 1
+    });
+    if (picked.canceled || !picked.assets[0]) {
+      return;
+    }
+    const localUri = await ensureLocalImportUri(picked.assets[0].uri, picked.assets[0].fileName ?? null);
+    setWizardUri(localUri);
+  }
+
+  async function wizardPickSingleFromFiles() {
+    setWizardError(null);
+    const picked = await DocumentPicker.getDocumentAsync({
+      type: ["image/*"],
+      copyToCacheDirectory: true
+    });
+    if (picked.canceled || !picked.assets?.[0]) {
+      return;
+    }
+    const asset = picked.assets[0];
+    const localUri = await ensureLocalImportUri(asset.uri, asset.name ?? null);
+    setWizardUri(localUri);
+  }
+
+  async function wizardEnterStep2RunOcr() {
+    if (!wizardUri) {
+      setWizardError("请先选择一张图片。");
+      return;
+    }
+    setWizardStep(2);
+    setWizardOcrLoading(true);
+    setWizardError(null);
+    setWizardOcrExpanded(false);
+    try {
+      const text = await recognizeTextFromImage(wizardUri);
+      setWizardOcrText(text);
+      setWizardKeywordsText(text);
+    } catch (error) {
+      setWizardError(formatOcrError(error));
+    } finally {
+      setWizardOcrLoading(false);
+    }
+  }
+
+  function wizardGoNext() {
+    if (wizardStep === 1) {
+      void wizardEnterStep2RunOcr();
+      return;
+    }
+    if (wizardStep === 2) {
+      if (wizardOcrLoading) {
+        return;
+      }
+      if (!wizardOcrText.trim()) {
+        setWizardError("请先完成 OCR 识别。");
+        return;
+      }
+      setWizardError(null);
+      setWizardStep(3);
+      return;
+    }
+    if (wizardStep === 3) {
+      const k = splitRecognitionKeywords(wizardKeywordsText);
+      if (!k.length) {
+        setWizardError("请填写关键词，可用空格、逗号、分号分隔多个词。");
+        return;
+      }
+      setWizardError(null);
+      setWizardStep(4);
+      return;
+    }
+    if (wizardStep === 4) {
+      if (!wizardModuleName.trim()) {
+        setWizardError("请填写模块展示名称。");
+        return;
+      }
+      setWizardError(null);
+      setWizardStep(5);
+    }
+  }
+
+  function wizardGoPrev() {
+    setWizardError(null);
+    if (wizardStep <= 1) {
+      return;
+    }
+    if (wizardStep === 2) {
+      setWizardStep(1);
+      return;
+    }
+    setWizardStep((s) => Math.max(1, s - 1));
+  }
+
+  async function submitCustomRecognitionModule() {
+    const keywords = splitRecognitionKeywords(wizardKeywordsText);
+    if (!keywords.length || !wizardModuleName.trim()) {
+      setWizardError("请完善模块名称与关键词。");
+      return;
+    }
+    const id = `cm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const loaded = await loadCustomRecognitionModules();
+    const nextModules = [...loaded.modules, { id, displayName: wizardModuleName.trim(), keywords }];
+    try {
+      await saveCustomRecognitionModules({ modules: nextModules, hiddenIds: loaded.hiddenIds });
+      setCustomRecognitionModules(nextModules);
+      setHiddenCustomModuleIds(loaded.hiddenIds);
+      await refreshTrendData(trendFilter);
+      closeCustomModuleWizard();
+      setCustomModuleNotice("已添加识别模块。");
+      setTimeout(() => setCustomModuleNotice(null), 2000);
+    } catch (error) {
+      setWizardError(error instanceof Error ? error.message : "保存失败");
+    }
+  }
+
   function syncParsedFromMetas(nextMetas: ImportedImageMeta[]) {
     setParsed(nextMetas.length ? nextMetas[nextMetas.length - 1].parseResult : EMPTY_PARSE_RESULT);
   }
@@ -583,7 +835,7 @@ export default function App() {
       const imageHash = await computeImageHash(imageUri);
       const text = await recognizeTextFromImage(imageUri);
       console.log("[OCR_FULL_TEXT_BEGIN]\n" + text + "\n[OCR_FULL_TEXT_END]");
-      const parsedResult = parseOcrText(text, ocrCustomRules);
+      const parsedResult = parseOcrText(text, ocrCustomRules, customRecognitionModules);
       const nextAssetItems = parsedResult.assets.map((asset, index) => ({
         ...asset,
         imageUri,
@@ -748,7 +1000,9 @@ export default function App() {
         }
         return item;
       });
-      const result = await saveImportSnapshot(currentImageHashes, toSave);
+      const hashToOcr = new Map(importedImageMetas.map((item) => [item.hash, item.rawOcrText]));
+      const ocrTextsForSave = currentImageHashes.map((h) => hashToOcr.get(h) ?? "");
+      const result = await saveImportSnapshot(currentImageHashes, toSave, ocrTextsForSave);
       setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
       await refreshTrendData(trendFilter);
       const summary = await queryDailySummary();
@@ -782,6 +1036,48 @@ export default function App() {
     resetWorkingImport();
     setClearMode(null);
     setClearAllStep2(false);
+  }
+
+  async function handleSeedDefaultModuleTest() {
+    if (!dbReady || seedTestBusy) {
+      return;
+    }
+    setSeedTestBusy(true);
+    setSaveNotice(null);
+    try {
+      await seedDefaultModuleTestData();
+      setSaveNotice(
+        "已写入内置模块测试数据：支付宝 / 招行 / 微信各 20 个时点，金额自 0 元起每档 +1 万。可用「清除测试数据」或「清空全部」移除。"
+      );
+      await refreshTrendData(trendFilter);
+      const summary = await queryDailySummary();
+      setDailySummary(summary);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setSaveNotice(`写入测试数据失败：${message}`);
+    } finally {
+      setSeedTestBusy(false);
+    }
+  }
+
+  async function handleClearSeedTest() {
+    if (!dbReady || seedTestBusy) {
+      return;
+    }
+    setSeedTestBusy(true);
+    setSaveNotice(null);
+    try {
+      const removed = await clearSeedTestData();
+      setSaveNotice(removed > 0 ? `已清除 ${removed} 条测试快照。` : "当前没有测试快照。");
+      await refreshTrendData(trendFilter);
+      const summary = await queryDailySummary();
+      setDailySummary(summary);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setSaveNotice(`清除测试数据失败：${message}`);
+    } finally {
+      setSeedTestBusy(false);
+    }
   }
 
   function updateCardOpacity(next: number) {
@@ -1063,7 +1359,7 @@ export default function App() {
               <View style={[styles.settingsOcrPickerWrap, styles.settingsOcrScopePickerWrap]}>
                 <View style={styles.settingsScopeDisplayRow}>
                   <Text style={[styles.classLabelText, styles.settingsScopePickerLabel]} numberOfLines={2}>
-                    {OCR_RULE_SCOPE_LABEL[ruleDraftScope]}
+                    {formatOcrRuleScopeLabel(ruleDraftScope, customRecognitionModules)}
                   </Text>
                   <Text style={styles.classArrowText}>▼</Text>
                 </View>
@@ -1076,6 +1372,24 @@ export default function App() {
                   {OCR_RULE_SCOPE_ORDER.map((scope) => (
                     <Picker.Item key={scope} label={OCR_RULE_SCOPE_LABEL[scope]} value={scope} />
                   ))}
+                  {customRecognitionModules.map((m) => (
+                    <Picker.Item
+                      key={`ocr-scope-cm-${m.id}`}
+                      label={`仅「${m.displayName}」`}
+                      value={`${OCR_CUSTOM_MODULE_SCOPE_PREFIX}${m.id}`}
+                    />
+                  ))}
+                  {typeof ruleDraftScope === "string" &&
+                  ruleDraftScope.startsWith(OCR_CUSTOM_MODULE_SCOPE_PREFIX) &&
+                  !customRecognitionModules.some(
+                    (m) => `${OCR_CUSTOM_MODULE_SCOPE_PREFIX}${m.id}` === ruleDraftScope
+                  ) ? (
+                    <Picker.Item
+                      key="ocr-scope-orphan"
+                      label={formatOcrRuleScopeLabel(ruleDraftScope, customRecognitionModules)}
+                      value={ruleDraftScope}
+                    />
+                  ) : null}
                 </Picker>
               </View>
               <View style={styles.ocrRuleModalActions}>
@@ -1099,6 +1413,122 @@ export default function App() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      <Modal visible={customModuleWizardVisible} animationType="slide" onRequestClose={closeCustomModuleWizard}>
+        <SafeAreaView style={styles.customModuleWizardSafe}>
+          <View style={styles.customModuleWizardHeader}>
+            <Text style={styles.customModuleWizardTitle}>新增识别模块</Text>
+            <Pressable style={styles.customModuleWizardHeaderCloseHit} onPress={closeCustomModuleWizard} hitSlop={12}>
+              <Text style={styles.customModuleWizardCloseText}>关闭</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.customModuleWizardStep}>步骤 {wizardStep} / 5</Text>
+          {wizardError ? <Text style={[styles.warn, styles.customModuleWizardErr]}>{wizardError}</Text> : null}
+          <ScrollView
+            style={styles.customModuleWizardScrollFlex}
+            contentContainerStyle={styles.customModuleWizardScroll}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {wizardStep === 1 ? (
+              <View style={styles.customModuleWizardStepBody}>
+                <Text style={styles.muted}>请选择一张截图（仅一张），与导入页相同来源。</Text>
+                {wizardUri ? (
+                  <Image source={{ uri: wizardUri }} style={styles.customModuleWizardPreview} resizeMode="contain" />
+                ) : null}
+                <Pressable style={styles.sheetButton} onPress={() => void wizardPickSingleFromGallery()}>
+                  <Text style={styles.sheetButtonText}>从相册选择</Text>
+                </Pressable>
+                <Pressable style={styles.sheetButton} onPress={() => void wizardPickSingleFromFiles()}>
+                  <Text style={styles.sheetButtonText}>从文件选择</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {wizardStep === 2 ? (
+              <View style={styles.customModuleWizardStepBody}>
+                {wizardOcrLoading ? <Text style={styles.muted}>OCR 识别中…</Text> : (
+                  <Text style={styles.muted}>识别完成。可展开查看原文。</Text>
+                )}
+                <Pressable style={styles.addRowButton} onPress={() => setWizardOcrExpanded((v) => !v)}>
+                  <Text style={styles.addRowButtonText}>
+                    {wizardOcrExpanded ? "收起 OCR 原文" : "查看 OCR 原文"}
+                  </Text>
+                </Pressable>
+                {wizardOcrExpanded ? (
+                  <ScrollView nestedScrollEnabled style={styles.ocrSelectableScroll} keyboardShouldPersistTaps="handled">
+                    <Text selectable style={styles.ocrSelectableText}>
+                      {wizardOcrText}
+                    </Text>
+                  </ScrollView>
+                ) : null}
+              </View>
+            ) : null}
+            {wizardStep === 3 ? (
+              <View style={styles.customModuleWizardStepBody}>
+                <Text style={styles.muted}>
+                  编辑识别用词，可用空格、英文/中文逗号、分号分隔多个词。之后每次保存导入时，合并 OCR 须同时包含以下全部片段，该次导入的资产总额才会计入本模块趋势。
+                </Text>
+                <TextInput
+                  value={wizardKeywordsText}
+                  onChangeText={setWizardKeywordsText}
+                  multiline
+                  style={[styles.settingsFieldInput, styles.customModuleWizardKeywordInput]}
+                  placeholder="多个词用空格、逗号或分号分隔"
+                  placeholderTextColor="#94a3b8"
+                  autoCorrect={false}
+                />
+                <Text style={styles.muted}>
+                  当前拆分为：{splitRecognitionKeywords(wizardKeywordsText).join(" · ") || "（无）"}
+                </Text>
+              </View>
+            ) : null}
+            {wizardStep === 4 ? (
+              <View style={styles.customModuleWizardStepBody}>
+                <Text style={styles.settingsSubLabel}>模块展示名称</Text>
+                <Text style={styles.muted}>将显示在首页折线图标题与设置中的模块列表。</Text>
+                <TextInput
+                  value={wizardModuleName}
+                  onChangeText={setWizardModuleName}
+                  style={styles.settingsFieldInput}
+                  placeholder="例如：创业板指关注"
+                  placeholderTextColor="#94a3b8"
+                />
+              </View>
+            ) : null}
+            {wizardStep === 5 ? (
+              <View style={styles.customModuleWizardStepBody}>
+                <Text style={styles.line}>模块名称：{wizardModuleName.trim() || "—"}</Text>
+                <Text style={styles.line}>须同时匹配的关键词：</Text>
+                <Text style={styles.muted}>{splitRecognitionKeywords(wizardKeywordsText).join(" · ") || "—"}</Text>
+                <Text style={styles.muted}>
+                  提交后，新导入在「确认并记录」时会写入 OCR；仅当某日快照的 OCR 同时包含上述全部词时，该日该次导入解析出的资产总额会计入此模块折线图（与内置微信/支付宝/招行模块并列）。
+                </Text>
+              </View>
+            ) : null}
+          </ScrollView>
+          <View style={styles.customModuleWizardFooter}>
+            <Pressable style={styles.customModuleWizardExitButton} onPress={closeCustomModuleWizard}>
+              <Text style={styles.customModuleWizardExitText}>退出向导</Text>
+            </Pressable>
+            <View style={styles.customModuleWizardFooterRight}>
+              {wizardStep > 1 ? (
+                <Pressable style={styles.ocrRuleModalSecondaryButton} onPress={wizardGoPrev}>
+                  <Text style={styles.ocrRuleModalSecondaryText}>上一步</Text>
+                </Pressable>
+              ) : null}
+              {wizardStep < 5 ? (
+                <Pressable style={styles.ocrRuleModalPrimaryButton} onPress={wizardGoNext}>
+                  <Text style={styles.ocrRuleModalPrimaryText}>{wizardStep === 1 ? "下一步（开始 OCR）" : "下一步"}</Text>
+                </Pressable>
+              ) : (
+                <Pressable style={styles.ocrRuleModalPrimaryButton} onPress={() => void submitCustomRecognitionModule()}>
+                  <Text style={styles.ocrRuleModalPrimaryText}>提交</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </SafeAreaView>
       </Modal>
 
       <ScrollView contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
@@ -1174,6 +1604,12 @@ export default function App() {
             <TrendLineChart points={platformTrendPoints[platform]} />
           </View>
         ))}
+        {visibleCustomRecognitionModules.map((m) => (
+          <View key={m.id} style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
+            <Text style={styles.cardTitle}>{m.displayName}趋势</Text>
+            <TrendLineChart points={customModuleTrendPoints[m.id] ?? []} />
+          </View>
+        ))}
       </ScrollView>
 
       {settingsVisible ? (
@@ -1232,7 +1668,7 @@ export default function App() {
           </View>
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <Text style={styles.settingsLabel}>模块展示</Text>
-            <Text style={styles.settingsSubLabel}>展示区域</Text>
+            <Text style={styles.settingsSubLabel}>内置平台</Text>
             <View style={styles.tagArea}>
               {visiblePlatformModules.map((platform) => (
                 <Pressable
@@ -1245,7 +1681,7 @@ export default function App() {
                 </Pressable>
               ))}
             </View>
-            <Text style={styles.settingsSubLabel}>隐藏区域</Text>
+            <Text style={styles.settingsSubLabel}>内置平台 · 隐藏</Text>
             <View style={styles.tagArea}>
               {hiddenPlatformModules.length ? (
                 hiddenPlatformModules.map((platform) => (
@@ -1259,9 +1695,54 @@ export default function App() {
                   </Pressable>
                 ))
               ) : (
-                <Text style={styles.muted}>当前没有隐藏模块。</Text>
+                <Text style={styles.muted}>当前没有隐藏的内置模块。</Text>
               )}
             </View>
+            <Text style={styles.settingsSubLabel}>自定义识别模块</Text>
+            <View style={styles.tagArea}>
+              {visibleCustomRecognitionModules.length ? (
+                visibleCustomRecognitionModules.map((m) => (
+                  <Pressable
+                    key={`vis-cm-${m.id}`}
+                    style={styles.visibleTag}
+                    onPress={() => void moveCustomModuleToHidden(m.id)}
+                  >
+                    <Text style={styles.visibleTagText}>{m.displayName}</Text>
+                    <Text style={styles.visibleTagAction}>×</Text>
+                  </Pressable>
+                ))
+              ) : (
+                <Text style={styles.muted}>暂无已展示的自定义模块。</Text>
+              )}
+            </View>
+            <Text style={styles.settingsSubLabel}>自定义识别模块 · 隐藏</Text>
+            <View style={styles.tagArea}>
+              {hiddenCustomRecognitionModules.length ? (
+                hiddenCustomRecognitionModules.map((m) => (
+                  <Pressable
+                    key={`hid-cm-${m.id}`}
+                    style={styles.hiddenTag}
+                    onPress={() => void moveCustomModuleToVisible(m.id)}
+                  >
+                    <Text style={styles.hiddenTagAction}>+</Text>
+                    <Text style={styles.hiddenTagText}>{m.displayName}</Text>
+                  </Pressable>
+                ))
+              ) : (
+                <Text style={styles.muted}>没有隐藏的自定义模块。</Text>
+              )}
+            </View>
+          </View>
+
+          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+            <Text style={styles.settingsLabel}>新增识别模块</Text>
+            <Text style={styles.muted}>
+              通过一张截图配置关键词与展示名称。之后每次导入并确认保存时，若当日 OCR 同时包含全部关键词，该次导入的资产总额会计入对应折线图（与内置平台并列）。
+            </Text>
+            {customModuleNotice ? <Text style={styles.muted}>{customModuleNotice}</Text> : null}
+            <Pressable style={styles.securityActionButton} onPress={openCustomModuleWizard}>
+              <Text style={styles.securityActionButtonText}>打开配置向导</Text>
+            </Pressable>
           </View>
 
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
@@ -1321,7 +1802,7 @@ export default function App() {
                       <View style={styles.ruleColScope}>
                         <View style={styles.ruleListCellBox}>
                           <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
-                            {OCR_RULE_SCOPE_LABEL[(rule.screenScope ?? "any") as OcrRuleScreenScope]}
+                            {formatOcrRuleScopeLabel(rule.screenScope, customRecognitionModules)}
                           </Text>
                         </View>
                       </View>
@@ -1541,6 +2022,25 @@ export default function App() {
                   <Text style={styles.clearActionText}>清空全部</Text>
                 </Pressable>
               </View>
+              <Text style={styles.muted}>
+                内置模块（支付宝 / 招商银行 / 微信）测试折线：近 20 天、每日金额从 0 元递增 1 万，写入后会计入首页与对应平台趋势图。
+              </Text>
+              <View style={styles.clearActionRowModal}>
+                <Pressable
+                  style={[styles.clearActionButton, (!dbReady || seedTestBusy) && styles.actionButtonDisabled]}
+                  disabled={!dbReady || seedTestBusy}
+                  onPress={() => void handleSeedDefaultModuleTest()}
+                >
+                  <Text style={styles.clearActionText}>{seedTestBusy ? "处理中…" : "写入测试数据"}</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.clearActionButtonMuted, (!dbReady || seedTestBusy) && styles.actionButtonDisabled]}
+                  disabled={!dbReady || seedTestBusy}
+                  onPress={() => void handleClearSeedTest()}
+                >
+                  <Text style={styles.clearActionText}>清除测试数据</Text>
+                </Pressable>
+              </View>
             </View>
           </ScrollView>
         </SafeAreaView>
@@ -1721,6 +2221,15 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(239,68,68,0.32)",
     paddingHorizontal: 12,
     paddingVertical: 6
+  },
+  clearActionButtonMuted: {
+    borderRadius: 999,
+    backgroundColor: "rgba(100,116,139,0.35)",
+    paddingHorizontal: 12,
+    paddingVertical: 6
+  },
+  actionButtonDisabled: {
+    opacity: 0.45
   },
   clearActionText: {
     color: "white",
@@ -2462,5 +2971,95 @@ const styles = StyleSheet.create({
   securityActionButtonText: {
     color: "white",
     fontWeight: "700"
+  },
+  customModuleWizardSafe: {
+    flex: 1,
+    backgroundColor: "#eff6ff"
+  },
+  customModuleWizardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#bfdbfe",
+    backgroundColor: "white"
+  },
+  customModuleWizardTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#163d7a",
+    flex: 1
+  },
+  customModuleWizardHeaderCloseHit: {
+    paddingVertical: 4,
+    paddingHorizontal: 4
+  },
+  customModuleWizardCloseText: {
+    color: "#2563eb",
+    fontSize: 16,
+    fontWeight: "700"
+  },
+  customModuleWizardStep: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    color: "#4f76b3",
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  customModuleWizardErr: {
+    marginHorizontal: 16,
+    marginBottom: 4
+  },
+  customModuleWizardScrollFlex: {
+    flex: 1
+  },
+  customModuleWizardScroll: {
+    flexGrow: 1,
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+    gap: 10
+  },
+  customModuleWizardStepBody: {
+    gap: 10,
+    paddingVertical: 8
+  },
+  customModuleWizardPreview: {
+    width: "100%",
+    height: 220,
+    borderRadius: 10,
+    backgroundColor: "#f0f4ff"
+  },
+  customModuleWizardKeywordInput: {
+    minHeight: 120,
+    textAlignVertical: "top"
+  },
+  customModuleWizardFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#bfdbfe",
+    backgroundColor: "white",
+    flexWrap: "wrap"
+  },
+  customModuleWizardFooterRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0
+  },
+  customModuleWizardExitButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 8
+  },
+  customModuleWizardExitText: {
+    color: "#64748b",
+    fontSize: 15,
+    fontWeight: "600"
   }
 });
