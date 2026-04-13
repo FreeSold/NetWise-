@@ -4,7 +4,7 @@
     "slug": "netwise",
     "scheme": "netwise",
     "icon": "./assets/icon.png",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": [
@@ -15,7 +15,7 @@
     },
     "android": {
       "package": "com.wanga.netwise",
-      "versionCode": 10
+      "versionCode": 11
     },
     "plugins": [
       "expo-dev-client",

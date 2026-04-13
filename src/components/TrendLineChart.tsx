@@ -16,12 +16,37 @@ const PAN_PX_PER_STEP = 38;
 const X_LABEL_SLOT_W = 44;
 /** 日期条相对绘图区左右多露出的安全边距 */
 const X_LABEL_STRIP_GUTTER = 14;
+/** 折线/圆点距绘图区左右边的内缩，避免端点圆与描边被裁切 */
+const LINE_X_INSET = 8;
 
-function buildPath(points: Array<{ x: number; y: number }>): string {
+/** 折线经过各数据点，并在首尾沿相邻段斜率外推到 [xMin, xMax]，使两端贴齐绘图区边界 */
+function buildPathExtended(
+  points: Array<{ x: number; y: number }>,
+  xMin: number,
+  xMax: number
+): string {
   if (!points.length) {
     return "";
   }
-  return points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  if (points.length === 1) {
+    const { y } = points[0];
+    return `M ${xMin} ${y} L ${xMax} ${y}`;
+  }
+  const extrapolateY = (xa: number, ya: number, xb: number, yb: number, xTarget: number) => {
+    const dx = xb - xa;
+    if (Math.abs(dx) < 1e-6) {
+      return ya;
+    }
+    return ya + ((yb - ya) / dx) * (xTarget - xa);
+  };
+  const p0 = points[0];
+  const p1 = points[1];
+  const pn1 = points[points.length - 1];
+  const pn2 = points[points.length - 2];
+  const yLeft = extrapolateY(p0.x, p0.y, p1.x, p1.y, xMin);
+  const yRight = extrapolateY(pn2.x, pn2.y, pn1.x, pn1.y, xMax);
+  const mid = points.map((p) => `L ${p.x} ${p.y}`).join(" ");
+  return `M ${xMin} ${yLeft} ${mid} L ${xMax} ${yRight}`;
 }
 
 /** 将步长规整为 1/2/5 × 10^n，便于出现 1000、5000、10000、200000 等刻度 */
@@ -178,7 +203,9 @@ export function TrendLineChart({ points }: Props) {
   /** 供 PanResponder 读取当前布局（plotW、冻结窗等） */
   const latestComputedRef = useRef({
     plotW: 1,
-    axisFreezeStart: null as number | null
+    axisFreezeStart: null as number | null,
+    panJ0: 0,
+    panJFirstMax: 0
   });
 
   useLayoutEffect(() => {
@@ -233,15 +260,11 @@ export function TrendLineChart({ points }: Props) {
           if (freezeW === null) {
             return;
           }
-          const plotW = latestComputedRef.current.plotW;
+          const { plotW, panJ0, panJFirstMax } = latestComputedRef.current;
           const denom = Math.max(1, DISPLAY_POINT_CAP - 1);
-          const plotStep = plotW / denom;
-          const bufStart = Math.max(0, freezeW - PAN_LINE_BUFFER);
-          const bufEnd = Math.min(len, freezeW + DISPLAY_POINT_CAP + PAN_LINE_BUFFER);
-          const j0 = freezeW - bufStart;
-          const jMax = Math.min(maxS, bufEnd - DISPLAY_POINT_CAP) - bufStart;
-          const T0 = -j0 * plotStep;
-          const TMin = -jMax * plotStep;
+          const plotStep = Math.max(1, plotW - 2 * LINE_X_INSET) / denom;
+          const T0 = -panJ0 * plotStep;
+          const TMin = -panJFirstMax * plotStep;
           const TMax = 0;
           const dx = g.dx;
           let T = T0 + dx;
@@ -329,7 +352,6 @@ export function TrendLineChart({ points }: Props) {
         bufferScrollW: 1,
         frozenScrollInitT: null as number | null,
         hideXLabels: false,
-        gridX2: 1,
         yTickLayouts: [] as Array<{ key: string; top: number; label: string }>,
         yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>
       };
@@ -356,7 +378,6 @@ export function TrendLineChart({ points }: Props) {
         bufferScrollW: 1,
         frozenScrollInitT: null as number | null,
         hideXLabels: false,
-        gridX2: 1,
         yTickLayouts: [] as Array<{ key: string; top: number; label: string }>,
         yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>
       };
@@ -375,14 +396,14 @@ export function TrendLineChart({ points }: Props) {
     const plotW = Math.max(chartRight - chartLeft, 1);
     const plotInnerH = Math.max(1, height - paddingY * 2);
     const denom = Math.max(1, DISPLAY_POINT_CAP - 1);
+    const lineUsableW = Math.max(1, plotW - 2 * LINE_X_INSET);
+    const plotStep = lineUsableW / denom;
 
     let path: string;
     let dots: Array<{ x: number; y: number; total: number; date: string }>;
     let bufferScrollW = plotW;
     let frozenScrollInitT: number | null = null;
     let hideXLabels = false;
-    let bandW = plotW;
-    let gridX2 = plotW;
 
     if (frozen) {
       const freezeW = axisFreezeStart!;
@@ -390,31 +411,31 @@ export function TrendLineChart({ points }: Props) {
       const bufEnd = Math.min(points.length, freezeW + DISPLAY_POINT_CAP + PAN_LINE_BUFFER);
       const bufPts = points.slice(bufStart, bufEnd);
       const M = bufPts.length;
-      const plotStep = plotW / denom;
-      bufferScrollW = Math.max(plotW, M <= 1 ? plotW : (M - 1) * plotStep);
-      bandW = bufferScrollW;
-      gridX2 = bufferScrollW;
-      const bufDots = bufPts.map((item, j) => {
-        const x = M <= 1 ? plotW / 2 : j * plotStep;
+      const j0 = freezeW - bufStart;
+      bufferScrollW =
+        M <= 1 ? plotW : Math.max(plotW, (M - 1) * plotStep + 2 * LINE_X_INSET);
+      const bufPathDots = bufPts.map((item, j) => {
+        const x = M <= 1 ? plotW / 2 : LINE_X_INSET + j * plotStep;
         const y = ((domainMax - item.total) * plotInnerH) / spread;
         return { x, y, total: item.total, date: item.date };
       });
-      path = buildPath(bufDots);
-      dots = bufDots;
-      const j0 = freezeW - bufStart;
+      // 路径铺满 Svg 左右边，圆点仍用 LINE_X_INSET 避免贴边裁切；静态与拖动时视觉一致
+      path = buildPathExtended(bufPathDots, 0, bufferScrollW);
+      dots = bufPathDots.slice(j0, j0 + DISPLAY_POINT_CAP);
       frozenScrollInitT = -(M <= 1 ? 0 : j0 * plotStep);
       hideXLabels = true;
     } else {
       const linePoints = points.slice(lineStartClamped, lineStartClamped + DISPLAY_POINT_CAP);
       dots = linePoints.map((item, index) => {
-        const x = linePoints.length === 1 ? plotW / 2 : (index * plotW) / denom;
+        const x =
+          linePoints.length === 1 ? plotW / 2 : LINE_X_INSET + (index * lineUsableW) / denom;
         const y = ((domainMax - item.total) * plotInnerH) / spread;
         return { x, y, total: item.total, date: item.date };
       });
-      path = buildPath(dots);
+      path = buildPathExtended(dots, 0, plotW);
     }
 
-    const yBandRects = buildYBandRects(ticks, domainMin, domainMax, 0, bandW, 0, plotInnerH);
+    const yBandRects = buildYBandRects(ticks, domainMin, domainMax, 0, plotW, 0, plotInnerH);
 
     const yTickLayouts = ticks.map((tick, idx) => {
       const yInner = ((domainMax - tick) * plotInnerH) / spread;
@@ -439,7 +460,6 @@ export function TrendLineChart({ points }: Props) {
       bufferScrollW,
       frozenScrollInitT,
       hideXLabels,
-      gridX2,
       yTickLayouts,
       yBandRects
     };
@@ -456,10 +476,28 @@ export function TrendLineChart({ points }: Props) {
     }
   }, [axisFreezeStart, computed.frozenScrollInitT, dragX]);
 
-  latestComputedRef.current = {
-    plotW: computed.plotW,
-    axisFreezeStart
-  };
+  {
+    const freezeW = axisFreezeStart;
+    if (freezeW !== null && points.length > 0) {
+      const len = points.length;
+      const maxS = Math.max(0, len - DISPLAY_POINT_CAP);
+      const bufStart = Math.max(0, freezeW - PAN_LINE_BUFFER);
+      const bufEnd = Math.min(len, freezeW + DISPLAY_POINT_CAP + PAN_LINE_BUFFER);
+      latestComputedRef.current = {
+        plotW: computed.plotW,
+        axisFreezeStart: freezeW,
+        panJ0: freezeW - bufStart,
+        panJFirstMax: Math.min(maxS, bufEnd - DISPLAY_POINT_CAP) - bufStart
+      };
+    } else {
+      latestComputedRef.current = {
+        plotW: computed.plotW,
+        axisFreezeStart: null,
+        panJ0: 0,
+        panJFirstMax: 0
+      };
+    }
+  }
 
   if (!points.length) {
     return (
@@ -497,91 +535,96 @@ export function TrendLineChart({ points }: Props) {
             }
           ]}
         >
-        <Animated.View
-          style={[
-            styles.chartPlotScroll,
-            {
-              width: computed.bufferScrollW,
-              height: computed.plotInnerH,
-              transform: [{ translateX: dragX }]
-            }
-          ]}
-        >
-          <Svg width={computed.bufferScrollW} height={computed.plotInnerH}>
-            {computed.yBandRects.map((band) => (
-              <Rect
-                key={band.key}
-                x={band.x}
-                y={band.y}
-                width={band.width}
-                height={band.height}
-                fill={band.fill}
-                opacity={0.5}
-              />
-            ))}
-            {computed.ticks.map((tick, idx) => {
-              const spread = Math.max(computed.domainMax - computed.domainMin, 1e-9);
-              const y = ((computed.domainMax - tick) * computed.plotInnerH) / spread;
-              return (
-                <Line
-                  key={`grid-${idx}-${tick}`}
-                  x1={0}
-                  y1={y}
-                  x2={computed.gridX2}
-                  y2={y}
-                  stroke="#dbeafe"
-                  strokeWidth={1}
+          <View style={styles.chartPlotBandLayer} pointerEvents="none">
+            <Svg width={computed.plotW} height={computed.plotInnerH}>
+              {computed.yBandRects.map((band) => (
+                <Rect
+                  key={band.key}
+                  x={band.x}
+                  y={band.y}
+                  width={band.width}
+                  height={band.height}
+                  fill={band.fill}
+                  opacity={0.5}
                 />
-              );
-            })}
-            <Path d={computed.path} stroke="#2563eb" strokeWidth={2} fill="none" />
+              ))}
+              {computed.ticks.map((tick, idx) => {
+                const spread = Math.max(computed.domainMax - computed.domainMin, 1e-9);
+                const y = ((computed.domainMax - tick) * computed.plotInnerH) / spread;
+                return (
+                  <Line
+                    key={`grid-${idx}-${tick}`}
+                    x1={0}
+                    y1={y}
+                    x2={computed.plotW}
+                    y2={y}
+                    stroke="#dbeafe"
+                    strokeWidth={1}
+                  />
+                );
+              })}
+            </Svg>
+          </View>
+          <Animated.View
+            style={[
+              styles.chartPlotScroll,
+              {
+                width: computed.bufferScrollW,
+                height: computed.plotInnerH,
+                transform: [{ translateX: dragX }],
+                zIndex: 2
+              }
+            ]}
+          >
+            <Svg width={computed.bufferScrollW} height={computed.plotInnerH} pointerEvents="none">
+              <Path d={computed.path} stroke="#2563eb" strokeWidth={2} fill="none" />
+              {computed.dots.map((dot, index) => (
+                <Circle
+                  key={`${dot.date}-${dot.total}-${index}`}
+                  cx={dot.x}
+                  cy={dot.y}
+                  r={index === safeActiveIndex ? 5 : 3}
+                  fill={index === safeActiveIndex ? "#1d4ed8" : "#2563eb"}
+                  pointerEvents="none"
+                />
+              ))}
+            </Svg>
+            <View style={styles.panLayer} {...panResponder.panHandlers} accessibilityLabel="横向拖动查看历史数据">
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setActiveIndex(null)} accessibilityRole="button" />
+            </View>
             {computed.dots.map((dot, index) => (
-              <Circle
-                key={`${dot.date}-${dot.total}-${index}`}
-                cx={dot.x}
-                cy={dot.y}
-                r={index === safeActiveIndex ? 5 : 3}
-                fill={index === safeActiveIndex ? "#1d4ed8" : "#2563eb"}
-                pointerEvents="none"
+              <Pressable
+                key={`dot-hit-${index}`}
+                style={[
+                  styles.dotHit,
+                  {
+                    left: dot.x - hitR,
+                    top: dot.y - hitR,
+                    width: hitR * 2,
+                    height: hitR * 2
+                  }
+                ]}
+                accessibilityHint="长按查看该日金额"
+                delayLongPress={380}
+                onLongPress={() => setActiveIndex(index)}
               />
             ))}
-          </Svg>
-          <View style={styles.panLayer} {...panResponder.panHandlers} accessibilityLabel="横向拖动查看历史数据">
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setActiveIndex(null)} accessibilityRole="button" />
-          </View>
-          {computed.dots.map((dot, index) => (
-            <Pressable
-              key={`dot-hit-${index}`}
-              style={[
-                styles.dotHit,
-                {
-                  left: dot.x - hitR,
-                  top: dot.y - hitR,
-                  width: hitR * 2,
-                  height: hitR * 2
-                }
-              ]}
-              accessibilityHint="长按查看该日金额"
-              delayLongPress={380}
-              onLongPress={() => setActiveIndex(index)}
-            />
-          ))}
-          {activeDot ? (
-            <View
-              style={[
-                styles.tooltip,
-                {
-                  left: Math.max(6, Math.min(activeDot.x - 84, computed.plotW - 168)),
-                  top: Math.max(6, activeDot.y - 56)
-                }
-              ]}
-              pointerEvents="none"
-            >
-              <Text style={styles.tooltipDate}>{activeDot.date}</Text>
-              <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
-            </View>
-          ) : null}
-        </Animated.View>
+            {activeDot ? (
+              <View
+                style={[
+                  styles.tooltip,
+                  {
+                    left: Math.max(6, Math.min(activeDot.x - 84, computed.plotW - 168)),
+                    top: Math.max(6, activeDot.y - 56)
+                  }
+                ]}
+                pointerEvents="none"
+              >
+                <Text style={styles.tooltipDate}>{activeDot.date}</Text>
+                <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
+              </View>
+            ) : null}
+          </Animated.View>
         </View>
 
         {!computed.hideXLabels ? (
@@ -691,6 +734,11 @@ const styles = StyleSheet.create({
     position: "absolute",
     overflow: "hidden",
     zIndex: 1
+  },
+  /** Y 轴色带 + 横向网格，不随 translateX 平移 */
+  chartPlotBandLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0
   },
   chartPlotScroll: {
     position: "absolute",
