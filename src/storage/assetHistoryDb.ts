@@ -146,15 +146,15 @@ export async function queryPlatformTrendSeries(platform: PlatformTrendFilter): P
   const totalsByDate = new Map<string, number>();
 
   for (const snapshot of snapshots) {
-    const snapshotTotal = snapshot.assets.reduce((sum, asset) => {
-      return belongsToPlatform(asset.source, platform)
-        ? sum + (Number.isFinite(asset.amount) ? asset.amount : 0)
-        : sum;
-    }, 0);
-
-    if (snapshotTotal > 0) {
-      totalsByDate.set(snapshot.date, roundMoney((totalsByDate.get(snapshot.date) ?? 0) + snapshotTotal));
+    const platformAssets = snapshot.assets.filter((asset) => belongsToPlatform(asset.source, platform));
+    if (!platformAssets.length) {
+      continue;
     }
+    const snapshotTotal = platformAssets.reduce(
+      (sum, asset) => sum + (Number.isFinite(asset.amount) ? asset.amount : 0),
+      0
+    );
+    totalsByDate.set(snapshot.date, roundMoney((totalsByDate.get(snapshot.date) ?? 0) + snapshotTotal));
   }
 
   return [...totalsByDate.entries()]
@@ -253,12 +253,13 @@ export async function seedDefaultModuleTestData(): Promise<{ snapshotsWritten: n
   store.snapshots = store.snapshots.filter((s) => !s.seedTest);
   let nextId = store.snapshots.length ? Math.max(...store.snapshots.map((item) => item.id)) + 1 : 1;
 
-  const anchor = new Date();
-  anchor.setHours(12, 0, 0, 0);
+  const start = new Date();
+  start.setHours(12, 0, 0, 0);
+  start.setDate(start.getDate() - (SEED_TEST_DAYS - 1));
 
   for (let j = 0; j < SEED_TEST_DAYS; j += 1) {
-    const d = new Date(anchor);
-    d.setDate(d.getDate() - (SEED_TEST_DAYS - 1 - j));
+    const d = new Date(start);
+    d.setDate(d.getDate() + j);
     const importDate = formatLocalYmd(d);
     const amount = j * SEED_TEST_STEP;
     const id = nextId;
