@@ -341,6 +341,7 @@ export function TrendLineChart({ points }: Props) {
       return {
         path: "",
         dots: [] as Array<{ x: number; y: number; total: number; date: string }>,
+        dotsSignature: "",
         ticks: [] as number[],
         domainMin: 0,
         domainMax: 1,
@@ -367,6 +368,7 @@ export function TrendLineChart({ points }: Props) {
       return {
         path: "",
         dots: [] as Array<{ x: number; y: number; total: number; date: string }>,
+        dotsSignature: "",
         ticks: [] as number[],
         domainMin: 0,
         domainMax: 1,
@@ -446,9 +448,12 @@ export function TrendLineChart({ points }: Props) {
       };
     });
 
+    const dotsSignature = dots.map((d) => `${d.date}:${d.total}`).join("|");
+
     return {
       path,
       dots,
+      dotsSignature,
       ticks,
       domainMin,
       domainMax,
@@ -464,6 +469,15 @@ export function TrendLineChart({ points }: Props) {
       yBandRects
     };
   }, [points, axisFreezeStart, windowStart, height, paddingY, rightPad, width]);
+
+  /** 可见折线点集变化时，默认高亮并展示最右侧点（当前窗内最近一次导入） */
+  useLayoutEffect(() => {
+    if (!computed.dots.length) {
+      setActiveIndex(null);
+      return;
+    }
+    setActiveIndex(computed.dots.length - 1);
+  }, [computed.dotsSignature]);
 
   const frozenPanScrollInitedRef = useRef(false);
   useLayoutEffect(() => {
@@ -604,9 +618,9 @@ export function TrendLineChart({ points }: Props) {
                     height: hitR * 2
                   }
                 ]}
-                accessibilityHint="长按查看该日金额"
-                delayLongPress={380}
-                onLongPress={() => setActiveIndex(index)}
+                accessibilityHint="点击查看该日金额"
+                hitSlop={4}
+                onPress={() => setActiveIndex(index)}
               />
             ))}
             {activeDot ? (
@@ -799,18 +813,18 @@ const styles = StyleSheet.create({
   tooltip: {
     position: "absolute",
     zIndex: 20,
-    borderRadius: 8,
-    backgroundColor: "#eff6ff",
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.94)",
     borderWidth: 1,
-    borderColor: "#bfdbfe",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    minWidth: 120,
+    borderColor: "rgba(37,99,235,0.22)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minWidth: 112,
     shadowColor: "#1e3a5f",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.12,
-    shadowRadius: 3,
-    elevation: 3
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 4
   },
   tooltipDate: {
     color: "#64748b",

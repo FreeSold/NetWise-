@@ -29,7 +29,7 @@ type SnapshotRecord = {
   assets: ParsedAsset[];
   /** 与 imageHashes 同序的 OCR 全文，用于自定义识别模块匹配；旧数据无此字段 */
   ocrTexts?: string[];
-  /** 内置模块测试折线数据，可通过 clearSeedTestData / clearAllImportHistory 清除 */
+  /** 测试数据折线快照，可通过 clearSeedTestData / clearAllImportHistory 清除 */
   seedTest?: boolean;
 };
 
@@ -394,7 +394,7 @@ function isReactNativeDevBundle(): boolean {
 }
 
 /**
- * 开发调试（Metro / dev client）时：若本机从未写过标记文件，则自动写入内置模块测试数据一次。
+ * 开发调试（Metro / dev client）时：若本机从未写过标记文件，则自动写入测试数据一次。
  * Release APK 中 __DEV__ 为 false，不会执行。
  * 与真机 APK 的数据互不共享（模拟器与手机、或不同包名实例各自一份存储）。
  */

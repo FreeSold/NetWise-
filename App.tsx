@@ -1,11 +1,10 @@
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Crypto from "expo-crypto";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { Picker } from "@react-native-picker/picker";
-import Slider from "@react-native-community/slider";
 import { Alert, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   OCR_CUSTOM_MODULE_SCOPE_PREFIX,
@@ -107,6 +106,41 @@ const OCR_RULE_SCOPE_LABEL: Record<BuiltinOcrRuleScreenScope, string> = {
   wechat_wallet: "仅微信钱包页"
 };
 
+/** 模块旁「i」浮层文案，避免在页内平铺说明 */
+const MODULE_HINT_TEXT = {
+  privacy:
+    "已启用本地加密存储。数据库不会保存原始截图，只保留图片 hash 用于去重。\n\n在导入页点击「确认并记录」后，会立即清掉当前导入图片的预览和内存引用。",
+  moduleDisplay:
+    "同一列表中：前排蓝色为当前展示的内置平台（支付宝 / 招行 / 微信），其后为自定义模块。点击内置名称旁 × 或自定义药丸上 × 可隐藏对应折线图；点 + 恢复展示（不删历史数据）。\n\n内置平台隐藏后以绿色胶囊显示；自定义模块隐藏后仍为浅蓝描边样式。点击自定义模块名称区域可进入配置。",
+  newCustomModule:
+    "通过一张截图完成配置：识别关键词与展示名称。之后每次在导入页「确认并记录」时，若当日合并后的 OCR 文本命中任一关键词，该次导入解析出的资产总额会计入对应自定义模块折线图（与内置微信 / 支付宝 / 招行并列）。",
+  ocrRules:
+    "规则保存在本机文件 netwise-ocr-custom-rules.json。「原文」为锚点关键词（去掉空白后的 OCR 全文须包含）；金额会自动取该关键词之后出现的数字，无需与某笔固定金额一字不差。可选「限定页面」减少跨 App 误匹配。",
+  ocrRulesList: "点击下方表格中的任一行可查看全文并编辑该规则；页面底部按钮用于添加新规则。",
+  dataCleanup:
+    "仅删除「已确认导入」的快照记录；设置里的自定义识别模块与自定义 OCR 规则不会被删除。操作不可恢复，请谨慎使用。",
+  seedTestData:
+    "写入测试数据会污染正常导入记录：模拟快照与真实数据合并，首页「目前为止总资产」与支付宝 / 招行 / 微信折线图都会受影响，请勿在日常记账时误触。\n\n将写入约 20 个连续日期、三平台各一条递增金额的测试曲线（带测试标记）。「清除测试数据」只删这些测试快照；「清空全部导入」会清空全部快照。",
+  trendChart:
+    "右侧筛选可切换「全部」或按资产分类查看趋势。下方各卡片为单平台或自定义模块的历史曲线；点按图表可查看单日金额。",
+  screenshotImport:
+    "最多可添加 6 张截图；点击缩略图可全屏预览，角标 × 可删除单张。识别完成后可在下方「解析结果」中修改金额与分类。\n\n识别后系统会按模板与规则自动分类，你可在确认保存前直接修正。",
+  parseResult:
+    "左栏为金额名称（旁 × 可删除该行），中栏为金额，右栏为资产分类。可点「手动添加一行」补充漏识别项；有 OCR 原文时可展开核对。确认无误后点底部「确认并记录」写入当日快照。",
+  wizardOverview:
+    "1）选择一张截图（与导入页相同来源，仅一张）。\n2）自动 OCR，可展开查看原文核对。\n3）填写匹配用词：可用空格、中英文逗号、分号分隔；多个词为「或」关系，合并 OCR 命中任一词即把该次导入总额计入本模块趋势。\n4）填写模块展示名称（首页折线图标题与设置列表中显示）。\n5）确认信息无误后提交。",
+  configModule:
+    "在此修改展示名称与匹配用词。多个匹配词为「或」关系。设置列表中药丸上的 × / + 只控制是否在首页展示该模块折线图；点击名称区域（药丸主体）可打开本页进行配置。",
+  configKeywords: "可用空格、英文/中文逗号、分号分隔多个词。",
+  ocrRuleSource:
+    "OCR 去掉空白后的全文须包含你填写的「原文」片段；金额会自动取该关键词之后出现的第一个数字（可与关键词紧挨或间隔若干符号）。",
+  ocrRuleScope:
+    "限定在特定 App 页面或「未识别」时才应用本规则，可减少其它应用截图被误匹配的概率。也可选择仅在某自定义识别模块对应的页面生效。",
+  clearToday: "将删除「今天」这一自然日内所有已确认导入的快照；其它日期的记录不受影响。",
+  clearAll:
+    "将删除所有日期的已确认导入快照，首页与折线图将变为空数据。不会删除设置中的自定义识别模块与自定义 OCR 规则。此操作不可恢复。"
+} as const;
+
 function formatOcrRuleScopeLabel(
   scope: OcrRuleScreenScope | undefined,
   customModules: CustomRecognitionModule[]
@@ -161,6 +195,7 @@ export default function App() {
   const [clearMode, setClearMode] = useState<"today" | "all" | null>(null);
   const [clearAllStep2, setClearAllStep2] = useState(false);
   const [seedTestBusy, setSeedTestBusy] = useState(false);
+  const [moduleHintPopover, setModuleHintPopover] = useState<{ title: string; body: string } | null>(null);
   const [dbReady, setDbReady] = useState(false);
   const [dbInitError, setDbInitError] = useState<string | null>(null);
   const [securityReady, setSecurityReady] = useState(false);
@@ -187,6 +222,7 @@ export default function App() {
   });
   const [visiblePlatformModules, setVisiblePlatformModules] = useState<PlatformTrendFilter[]>(PLATFORM_TREND_ORDER);
   const [cardOpacityPercent, setCardOpacityPercent] = useState(86);
+  const opacityBarWidthRef = useRef(0);
   const [parsed, setParsed] = useState<ParseResult>(EMPTY_PARSE_RESULT);
   const [editableAssets, setEditableAssets] = useState<EditableAssetItem[]>([]);
   const [ocrCustomRules, setOcrCustomRules] = useState<OcrCustomRule[]>([]);
@@ -223,8 +259,28 @@ export default function App() {
   const insuranceAmount = dailySummary.byClass.insurance;
   const stockAmount = dailySummary.byClass.stock;
   const wealthManagementAmount = dailySummary.byClass.wealth_management;
-  const cardBackgroundColor = `rgba(255,255,255,${Math.max(0.3, Math.min(1, cardOpacityPercent / 100))})`;
+  const cardAlpha = Math.max(0.3, Math.min(1, cardOpacityPercent / 100));
+  const cardBackgroundColor = `rgba(255,255,255,${cardAlpha})`;
+  /** 与卡片同步：槽用同一白底 alpha；填充条蓝色 alpha 随卡片透明度变化 */
+  const opacityTrackFillColor = `rgba(59,130,246,${Math.min(1, 0.38 + cardAlpha * 0.62)})`;
+  /** 卡片 30%～100% 映射到控件 50%～100%，与卡片透明度联动且不单独展示 */
+  const moduleControlOpacity = 0.5 + ((cardOpacityPercent - 30) / 70) * 0.5;
+  const modulePressOpacityStyle = (factor = 1) => ({ opacity: moduleControlOpacity * factor });
   const hiddenPlatformModules = PLATFORM_TREND_ORDER.filter((platform) => !visiblePlatformModules.includes(platform));
+
+  function renderModuleInfoIcon(title: string, body: string, useModuleOpacity = false) {
+    return (
+      <Pressable
+        style={[styles.moduleInfoIconHit, useModuleOpacity ? modulePressOpacityStyle() : null]}
+        onPress={() => setModuleHintPopover({ title, body })}
+        hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel={`${title}说明`}
+      >
+        <Text style={styles.moduleInfoIconChar}>i</Text>
+      </Pressable>
+    );
+  }
   const visibleCustomRecognitionModules = customRecognitionModules.filter((m) => !hiddenCustomModuleIds.includes(m.id));
   const hiddenCustomRecognitionModules = customRecognitionModules.filter((m) => hiddenCustomModuleIds.includes(m.id));
   const currentImageHashes = importedImageMetas.map((item) => item.hash);
@@ -1222,6 +1278,16 @@ export default function App() {
     setCardOpacityPercent(Math.max(30, Math.min(100, next)));
   }
 
+  function applyOpacityFromBarX(x: number, width: number) {
+    if (width <= 0) {
+      return;
+    }
+    const clamped = Math.max(0, Math.min(width, x));
+    const ratio = clamped / width;
+    const value = Math.round(30 + ratio * 70);
+    updateCardOpacity(value);
+  }
+
   async function handlePasscodeSubmit() {
     if (securityBusy) {
       return;
@@ -1348,6 +1414,30 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <ExpoStatusBar style="auto" />
       <Modal
+        visible={moduleHintPopover !== null}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setModuleHintPopover(null)}
+      >
+        <View style={styles.overlayMask}>
+          <Pressable style={styles.overlayMaskTouch} onPress={() => setModuleHintPopover(null)} />
+          <View style={styles.moduleHintPopoverCard}>
+            <Text style={styles.moduleHintPopoverTitle}>{moduleHintPopover?.title}</Text>
+            <ScrollView
+              style={styles.moduleHintPopoverScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.moduleHintPopoverBody}>{moduleHintPopover?.body}</Text>
+            </ScrollView>
+            <Pressable style={styles.moduleHintPopoverOk} onPress={() => setModuleHintPopover(null)}>
+              <Text style={styles.moduleHintPopoverOkText}>知道了</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={sourceModalVisible}
         animationType="fade"
         transparent
@@ -1411,14 +1501,15 @@ export default function App() {
             }}
           />
           <View style={styles.sourceSheet}>
-            <Text style={styles.sourceTitle}>
-              {clearMode === "all" && clearAllStep2 ? "再次确认：清空全部导入记录？" : "确认清空数据？"}
-            </Text>
-            <Text style={styles.muted}>
-              {clearMode === "today"
-                ? "将删除当前日期的所有已确认导入记录。"
-                : "将删除所有日期的已确认导入快照（首页与折线图将基于空数据）。不会删除设置中的自定义识别模块与自定义 OCR 规则。此操作不可恢复。"}
-            </Text>
+            <View style={styles.sourceTitleHintRow}>
+              <Text style={[styles.sourceTitle, styles.sourceTitleFlex]}>
+                {clearMode === "all" && clearAllStep2 ? "再次确认：清空全部导入记录？" : "确认清空数据？"}
+              </Text>
+              {renderModuleInfoIcon(
+                "说明",
+                clearMode === "today" ? MODULE_HINT_TEXT.clearToday : MODULE_HINT_TEXT.clearAll
+              )}
+            </View>
             <Pressable style={styles.sheetButton} onPress={handleClearData}>
               <Text style={styles.sheetButtonText}>{clearMode === "all" && !clearAllStep2 ? "下一步确认" : "确认清空"}</Text>
             </Pressable>
@@ -1451,10 +1542,10 @@ export default function App() {
                 contentContainerStyle={styles.ocrRuleModalScroll}
               >
               <Text style={styles.ocrRuleModalTitle}>{ocrRuleEditingId ? "编辑规则" : "添加规则"}</Text>
-              <Text style={styles.settingsSubLabel}>原文（锚点关键词）</Text>
-              <Text style={styles.muted}>
-                OCR 去掉空白后须包含这一段；金额自动取关键词之后出现的第一个数字（可与关键词紧挨或隔几个符号）。
-              </Text>
+              <View style={styles.settingsSubLabelHintRow}>
+                <Text style={styles.settingsSubLabel}>原文（锚点关键词）</Text>
+                {renderModuleInfoIcon("原文（锚点关键词）", MODULE_HINT_TEXT.ocrRuleSource)}
+              </View>
               <TextInput
                 value={ruleDraftSource}
                 onChangeText={setRuleDraftSource}
@@ -1493,7 +1584,10 @@ export default function App() {
                   ))}
                 </Picker>
               </View>
-              <Text style={styles.settingsSubLabel}>限定页面（防跨 App 误匹配）</Text>
+              <View style={styles.settingsSubLabelHintRow}>
+                <Text style={styles.settingsSubLabel}>限定页面（防跨 App 误匹配）</Text>
+                {renderModuleInfoIcon("限定页面", MODULE_HINT_TEXT.ocrRuleScope)}
+              </View>
               <View style={[styles.settingsOcrPickerWrap, styles.settingsOcrScopePickerWrap]}>
                 <View style={styles.settingsScopeDisplayRow}>
                   <Text style={[styles.classLabelText, styles.settingsScopePickerLabel]} numberOfLines={2}>
@@ -1556,7 +1650,10 @@ export default function App() {
       <Modal visible={customModuleWizardVisible} animationType="slide" onRequestClose={closeCustomModuleWizard}>
         <SafeAreaView style={styles.customModuleWizardSafe}>
           <View style={styles.customModuleWizardHeader}>
-            <Text style={styles.customModuleWizardTitle}>新增识别模块</Text>
+            <View style={styles.customModuleWizardTitleRow}>
+              <Text style={styles.customModuleWizardTitle}>新增识别模块</Text>
+              {renderModuleInfoIcon("新增识别模块", MODULE_HINT_TEXT.wizardOverview)}
+            </View>
             <Pressable style={styles.customModuleWizardHeaderCloseHit} onPress={closeCustomModuleWizard} hitSlop={12}>
               <Text style={styles.customModuleWizardCloseText}>关闭</Text>
             </Pressable>
@@ -1571,7 +1668,6 @@ export default function App() {
           >
             {wizardStep === 1 ? (
               <View style={styles.customModuleWizardStepBody}>
-                <Text style={styles.muted}>请选择一张截图（仅一张），与导入页相同来源。</Text>
                 {wizardUri ? (
                   <Image source={{ uri: wizardUri }} style={styles.customModuleWizardPreview} resizeMode="contain" />
                 ) : null}
@@ -1585,9 +1681,7 @@ export default function App() {
             ) : null}
             {wizardStep === 2 ? (
               <View style={styles.customModuleWizardStepBody}>
-                {wizardOcrLoading ? <Text style={styles.muted}>OCR 识别中…</Text> : (
-                  <Text style={styles.muted}>识别完成。可展开查看原文。</Text>
-                )}
+                {wizardOcrLoading ? <Text style={styles.muted}>OCR 识别中…</Text> : null}
                 <Pressable style={styles.addRowButton} onPress={() => setWizardOcrExpanded((v) => !v)}>
                   <Text style={styles.addRowButtonText}>
                     {wizardOcrExpanded ? "收起 OCR 原文" : "查看 OCR 原文"}
@@ -1604,9 +1698,6 @@ export default function App() {
             ) : null}
             {wizardStep === 3 ? (
               <View style={styles.customModuleWizardStepBody}>
-                <Text style={styles.muted}>
-                  编辑识别用词，可用空格、英文/中文逗号、分号分隔多个词。多个词为「或」关系：合并 OCR 中只要命中其中任意一个片段，该次导入的资产总额即会计入本模块趋势。
-                </Text>
                 <TextInput
                   value={wizardKeywordsText}
                   onChangeText={setWizardKeywordsText}
@@ -1623,8 +1714,10 @@ export default function App() {
             ) : null}
             {wizardStep === 4 ? (
               <View style={styles.customModuleWizardStepBody}>
-                <Text style={styles.settingsSubLabel}>模块展示名称</Text>
-                <Text style={styles.muted}>将显示在首页折线图标题与设置中的模块列表。</Text>
+                <View style={styles.settingsSubLabelHintRow}>
+                  <Text style={styles.settingsSubLabel}>模块展示名称</Text>
+                  {renderModuleInfoIcon("模块展示名称", "将显示在首页对应折线图标题与设置中的模块列表中。")}
+                </View>
                 <TextInput
                   value={wizardModuleName}
                   onChangeText={setWizardModuleName}
@@ -1639,9 +1732,13 @@ export default function App() {
                 <Text style={styles.line}>模块名称：{wizardModuleName.trim() || "—"}</Text>
                 <Text style={styles.line}>匹配用词（任一命中即可）：</Text>
                 <Text style={styles.muted}>{splitRecognitionKeywords(wizardKeywordsText).join(" · ") || "—"}</Text>
-                <Text style={styles.muted}>
-                  提交后，新导入在「确认并记录」时会写入 OCR；当某日快照的合并 OCR 命中上述任一词时，该日该次导入解析出的资产总额会计入此模块折线图（与内置微信/支付宝/招行模块并列）。
-                </Text>
+                <View style={styles.settingsSubLabelHintRow}>
+                  <Text style={styles.settingsSubLabel}>提交说明</Text>
+                  {renderModuleInfoIcon(
+                    "提交说明",
+                    "提交后，新导入在「确认并记录」时会写入 OCR；当某日快照的合并 OCR 命中上述任一词时，该日该次导入解析出的资产总额会计入此模块折线图（与内置微信 / 支付宝 / 招行模块并列）。"
+                  )}
+                </View>
               </View>
             ) : null}
           </ScrollView>
@@ -1672,7 +1769,10 @@ export default function App() {
       <Modal visible={customModuleConfigVisible} animationType="slide" onRequestClose={closeCustomModuleConfig}>
         <SafeAreaView style={styles.customModuleWizardSafe}>
           <View style={styles.customModuleWizardHeader}>
-            <Text style={styles.customModuleWizardTitle}>配置识别模块</Text>
+            <View style={styles.customModuleWizardTitleRow}>
+              <Text style={styles.customModuleWizardTitle}>配置识别模块</Text>
+              {renderModuleInfoIcon("配置识别模块", MODULE_HINT_TEXT.configModule)}
+            </View>
             <Pressable style={styles.customModuleWizardHeaderCloseHit} onPress={closeCustomModuleConfig} hitSlop={12}>
               <Text style={styles.customModuleWizardCloseText}>关闭</Text>
             </Pressable>
@@ -1684,9 +1784,6 @@ export default function App() {
             showsVerticalScrollIndicator={false}
           >
             {editCmError ? <Text style={[styles.warn, styles.customModuleWizardErr]}>{editCmError}</Text> : null}
-            <Text style={styles.muted}>
-              修改展示名称与匹配用词。多个词为「或」关系。标签上的 × / + 仅控制是否在首页展示该模块折线图，点此区域外的主体可打开本页。
-            </Text>
             <Text style={styles.settingsSubLabel}>模块展示名称</Text>
             <TextInput
               value={editCmDisplayName}
@@ -1696,8 +1793,10 @@ export default function App() {
               placeholderTextColor="#94a3b8"
               editable={!editCmSaving}
             />
-            <Text style={styles.settingsSubLabel}>匹配用词（任一命中即可）</Text>
-            <Text style={styles.muted}>可用空格、英文/中文逗号、分号分隔。</Text>
+            <View style={styles.settingsSubLabelHintRow}>
+              <Text style={styles.settingsSubLabel}>匹配用词（任一命中即可）</Text>
+              {renderModuleInfoIcon("匹配用词", MODULE_HINT_TEXT.configKeywords)}
+            </View>
             <TextInput
               value={editCmKeywordsText}
               onChangeText={setEditCmKeywordsText}
@@ -1736,10 +1835,10 @@ export default function App() {
           <View style={styles.heroTopRow}>
             <Text style={styles.heroHint}>目前为止总资产(元)</Text>
             <View style={styles.heroActions}>
-              <Pressable style={styles.manageButton} onPress={() => setManageVisible(true)}>
+              <Pressable style={[styles.manageButton, modulePressOpacityStyle()]} onPress={() => setManageVisible(true)}>
                 <Text style={styles.manageButtonText}>导入</Text>
               </Pressable>
-              <Pressable style={styles.settingsGearButton} onPress={() => setSettingsVisible(true)}>
+              <Pressable style={[styles.settingsGearButton, modulePressOpacityStyle()]} onPress={() => setSettingsVisible(true)}>
                 <Text style={styles.settingsGearText}>⚙</Text>
               </Pressable>
             </View>
@@ -1776,14 +1875,21 @@ export default function App() {
 
         <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
           <View style={styles.trendHeaderRow}>
-            <Text style={styles.cardTitle}>资金趋势折线图</Text>
+            <View style={styles.trendHeaderTitleCluster}>
+              <View style={styles.cardTitleHintRow}>
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  资金趋势折线图
+                </Text>
+                {renderModuleInfoIcon("资金趋势折线图", MODULE_HINT_TEXT.trendChart, true)}
+              </View>
+            </View>
             <View style={styles.trendPickerArea}>
-              <Pressable style={styles.trendPickerWrap} onPress={() => setTrendMenuVisible((prev) => !prev)}>
+              <Pressable style={[styles.trendPickerWrap, modulePressOpacityStyle()]} onPress={() => setTrendMenuVisible((prev) => !prev)}>
                 <Text style={styles.trendPickerLabel}>{TREND_FILTER_LABEL[trendFilter]}</Text>
                 <Text style={styles.trendPickerArrow}>▼</Text>
               </Pressable>
               {trendMenuVisible ? (
-                <View style={styles.trendDropdownMenu}>
+                <View style={[styles.trendDropdownMenu, modulePressOpacityStyle()]}>
                   {TREND_FILTER_ORDER.map((filter) => (
                     <Pressable
                       key={filter}
@@ -1837,41 +1943,47 @@ export default function App() {
             contentContainerStyle={styles.settingsScrollContent}
             showsVerticalScrollIndicator={false}
           >
-          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.settingsLabel}>卡片透明度: {cardOpacityPercent}%</Text>
-            <View style={styles.opacityRow}>
-              <Pressable style={styles.opacityButton} onPress={() => updateCardOpacity(cardOpacityPercent - 5)}>
-                <Text style={styles.opacityButtonText}>-5%</Text>
-              </Pressable>
-              <View style={styles.opacitySliderWrap}>
-                <Slider
-                  minimumValue={30}
-                  maximumValue={100}
-                  step={5}
-                  value={cardOpacityPercent}
-                  onValueChange={(value) => updateCardOpacity(Number(value))}
-                  minimumTrackTintColor="#2563eb"
-                  maximumTrackTintColor="#bfdbfe"
-                  thumbTintColor="#1d4ed8"
-                />
+          <View style={styles.settingsOpacityBarRow}>
+            <Text style={styles.settingsOpacityInlineLabel}>透明度：</Text>
+            <View
+              style={styles.opacityTrackTouch}
+              onLayout={(e) => {
+                opacityBarWidthRef.current = e.nativeEvent.layout.width;
+              }}
+              onStartShouldSetResponder={() => true}
+              onMoveShouldSetResponder={() => true}
+              onResponderGrant={(e) =>
+                applyOpacityFromBarX(e.nativeEvent.locationX, opacityBarWidthRef.current)
+              }
+              onResponderMove={(e) =>
+                applyOpacityFromBarX(e.nativeEvent.locationX, opacityBarWidthRef.current)
+              }
+            >
+              <View style={styles.opacityTrackClip}>
+                <View style={[styles.opacityTrackBg, { backgroundColor: cardBackgroundColor }]}>
+                  <View
+                    style={[
+                      styles.opacityTrackFill,
+                      {
+                        width: `${((cardOpacityPercent - 30) / 70) * 100}%`,
+                        backgroundColor: opacityTrackFillColor
+                      }
+                    ]}
+                  />
+                </View>
+                <View style={styles.opacityPercentCenter} pointerEvents="none">
+                  <Text style={styles.opacityTrackPercentText}>{cardOpacityPercent}%</Text>
+                </View>
               </View>
-              <Pressable style={styles.opacityButton} onPress={() => updateCardOpacity(cardOpacityPercent + 5)}>
-                <Text style={styles.opacityButtonText}>+5%</Text>
-              </Pressable>
             </View>
-            <View style={styles.opacityMarksRow}>
-              <Text style={styles.opacityMarkText}>30%</Text>
-              <Text style={styles.opacityMarkText}>65%</Text>
-              <Text style={styles.opacityMarkText}>100%</Text>
-            </View>
-            <Text style={styles.muted}>透明度越低，蓝色背景透出越明显。</Text>
           </View>
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.settingsLabel}>隐私与安全</Text>
-            <Text style={styles.muted}>已启用本地加密存储。数据库不会保存原始截图，只保留图片 hash 用于去重。</Text>
-            <Text style={styles.muted}>点击确认保存后，会立即清掉当前导入图片的预览和内存引用。</Text>
+            <View style={styles.settingsLabelHintRow}>
+              <Text style={styles.settingsLabel}>隐私与安全</Text>
+              {renderModuleInfoIcon("隐私与安全", MODULE_HINT_TEXT.privacy, true)}
+            </View>
             {biometricAvailable ? (
-              <Pressable style={styles.securityActionButton} onPress={handleToggleBiometric}>
+              <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={handleToggleBiometric}>
                 <Text style={styles.securityActionButtonText}>{biometricEnabled ? "关闭生物识别解锁" : "开启生物识别解锁"}</Text>
               </Pressable>
             ) : (
@@ -1879,115 +1991,100 @@ export default function App() {
             )}
           </View>
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.settingsLabel}>模块展示</Text>
-            <Text style={styles.settingsSubLabel}>内置平台</Text>
+            <View style={styles.settingsLabelHintRow}>
+              <Text style={styles.settingsLabel}>模块展示</Text>
+              {renderModuleInfoIcon("模块展示", MODULE_HINT_TEXT.moduleDisplay, true)}
+            </View>
             <View style={styles.tagArea}>
               {visiblePlatformModules.map((platform) => (
                 <Pressable
                   key={`visible-${platform}`}
-                  style={styles.visibleTag}
+                  style={[styles.visibleTag, modulePressOpacityStyle()]}
                   onPress={() => movePlatformModuleToHidden(platform)}
                 >
                   <Text style={styles.visibleTagText}>{PLATFORM_MODULE_LABEL[platform]}</Text>
                   <Text style={styles.visibleTagAction}>×</Text>
                 </Pressable>
               ))}
-            </View>
-            <Text style={styles.settingsSubLabel}>内置平台 · 隐藏</Text>
-            <View style={styles.tagArea}>
-              {hiddenPlatformModules.length ? (
-                hiddenPlatformModules.map((platform) => (
+              {visibleCustomRecognitionModules.map((m) => (
+                <View key={`vis-cm-${m.id}`} style={styles.customModuleVisiblePill}>
                   <Pressable
-                    key={`hidden-${platform}`}
-                    style={styles.hiddenTag}
-                    onPress={() => movePlatformModuleToVisible(platform)}
+                    style={[styles.customModuleVisiblePillBody, modulePressOpacityStyle()]}
+                    onPress={() => openCustomModuleConfig(m)}
+                  >
+                    <Text style={[styles.visibleTagText, styles.customModulePillLabel]} numberOfLines={1}>
+                      {m.displayName}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.customModulePillDivider} />
+                  <Pressable
+                    style={[styles.customModuleVisiblePillAction, modulePressOpacityStyle()]}
+                    onPress={() => void moveCustomModuleToHidden(m.id)}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.visibleTagAction}>×</Text>
+                  </Pressable>
+                </View>
+              ))}
+              {hiddenPlatformModules.map((platform) => (
+                <Pressable
+                  key={`hidden-${platform}`}
+                  style={[styles.platformHiddenGreenCapsule, modulePressOpacityStyle()]}
+                  onPress={() => movePlatformModuleToVisible(platform)}
+                >
+                  <Text style={styles.platformHiddenGreenCapsuleAction}>+</Text>
+                  <Text style={styles.platformHiddenGreenCapsuleText}>{PLATFORM_MODULE_LABEL[platform]}</Text>
+                </Pressable>
+              ))}
+              {hiddenCustomRecognitionModules.map((m) => (
+                <View key={`hid-cm-${m.id}`} style={styles.customModuleHiddenPill}>
+                  <Pressable
+                    style={[styles.customModuleHiddenPillAction, modulePressOpacityStyle()]}
+                    onPress={() => void moveCustomModuleToVisible(m.id)}
+                    hitSlop={8}
                   >
                     <Text style={styles.hiddenTagAction}>+</Text>
-                    <Text style={styles.hiddenTagText}>{PLATFORM_MODULE_LABEL[platform]}</Text>
                   </Pressable>
-                ))
-              ) : (
-                <Text style={styles.muted}>当前没有隐藏的内置模块。</Text>
-              )}
-            </View>
-            <Text style={styles.settingsSubLabel}>自定义识别模块</Text>
-            <Text style={styles.muted}>点击名称区域进入配置（可改名称、用词或删除）；× 为隐藏折线图，+ 为恢复展示。</Text>
-            <View style={styles.tagArea}>
-              {visibleCustomRecognitionModules.length ? (
-                visibleCustomRecognitionModules.map((m) => (
-                  <View key={`vis-cm-${m.id}`} style={styles.customModuleVisiblePill}>
-                    <Pressable
-                      style={styles.customModuleVisiblePillBody}
-                      onPress={() => openCustomModuleConfig(m)}
-                    >
-                      <Text style={[styles.visibleTagText, styles.customModulePillLabel]} numberOfLines={1}>
-                        {m.displayName}
-                      </Text>
-                    </Pressable>
-                    <View style={styles.customModulePillDivider} />
-                    <Pressable
-                      style={styles.customModuleVisiblePillAction}
-                      onPress={() => void moveCustomModuleToHidden(m.id)}
-                      hitSlop={8}
-                    >
-                      <Text style={styles.visibleTagAction}>×</Text>
-                    </Pressable>
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.muted}>暂无已展示的自定义模块。</Text>
-              )}
-            </View>
-            <Text style={styles.settingsSubLabel}>自定义识别模块 · 隐藏</Text>
-            <View style={styles.tagArea}>
-              {hiddenCustomRecognitionModules.length ? (
-                hiddenCustomRecognitionModules.map((m) => (
-                  <View key={`hid-cm-${m.id}`} style={styles.customModuleHiddenPill}>
-                    <Pressable
-                      style={styles.customModuleHiddenPillAction}
-                      onPress={() => void moveCustomModuleToVisible(m.id)}
-                      hitSlop={8}
-                    >
-                      <Text style={styles.hiddenTagAction}>+</Text>
-                    </Pressable>
-                    <View style={styles.customModulePillDividerLight} />
-                    <Pressable style={styles.customModuleHiddenPillBody} onPress={() => openCustomModuleConfig(m)}>
-                      <Text style={[styles.hiddenTagText, styles.customModulePillLabel]} numberOfLines={1}>
-                        {m.displayName}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.muted}>没有隐藏的自定义模块。</Text>
-              )}
+                  <View style={styles.customModulePillDividerLight} />
+                  <Pressable
+                    style={[styles.customModuleHiddenPillBody, modulePressOpacityStyle()]}
+                    onPress={() => openCustomModuleConfig(m)}
+                  >
+                    <Text style={[styles.hiddenTagText, styles.customModulePillLabel]} numberOfLines={1}>
+                      {m.displayName}
+                    </Text>
+                  </Pressable>
+                </View>
+              ))}
             </View>
           </View>
 
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.settingsLabel}>新增识别模块</Text>
-            <Text style={styles.muted}>
-              通过一张截图配置关键词与展示名称。之后每次导入并确认保存时，若当日合并 OCR 命中任一关键词，该次导入的资产总额会计入对应折线图（与内置平台并列）。
-            </Text>
+            <View style={styles.settingsLabelHintRow}>
+              <Text style={styles.settingsLabel}>新增识别模块</Text>
+              {renderModuleInfoIcon("新增识别模块", MODULE_HINT_TEXT.newCustomModule, true)}
+            </View>
             {customModuleNotice ? <Text style={styles.muted}>{customModuleNotice}</Text> : null}
-            <Pressable style={styles.securityActionButton} onPress={openCustomModuleWizard}>
+            <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={openCustomModuleWizard}>
               <Text style={styles.securityActionButtonText}>打开配置向导</Text>
             </Pressable>
           </View>
 
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.settingsLabel}>自定义 OCR 识别规则</Text>
-            <Text style={styles.muted}>
-              规则保存在本机（netwise-ocr-custom-rules.json）。「原文」为锚点关键词（去空白后 OCR 须包含）；金额自动取该关键词之后出现的数字，无需与某笔固定金额一致。可选「限定页面」防跨 App 误匹配。
-            </Text>
+            <View style={styles.settingsLabelHintRow}>
+              <Text style={styles.settingsLabel}>自定义 OCR 识别规则</Text>
+              {renderModuleInfoIcon("自定义 OCR 识别规则", MODULE_HINT_TEXT.ocrRules, true)}
+            </View>
             {customRuleNotice ? (
               <Text style={customRuleNotice.includes("已保存") ? styles.muted : styles.warn}>{customRuleNotice}</Text>
             ) : null}
             {ocrCustomRules.length ? (
               <View style={styles.settingsRuleListSection}>
-                <Text style={styles.settingsSubLabel}>已添加的规则</Text>
-                <Text style={styles.muted}>点击一行可查看全文并编辑；下方按钮添加新规则。</Text>
-                <View style={styles.assetTableHeaderRow}>
+                <View style={styles.settingsSubLabelHintRow}>
+                  <Text style={styles.settingsSubLabel}>已添加的规则</Text>
+                  {renderModuleInfoIcon("已添加的规则", MODULE_HINT_TEXT.ocrRulesList, true)}
+                </View>
+                <View style={[styles.assetTableHeaderRow, styles.ruleListColumnsGap]}>
                   <View style={styles.ruleColSource}>
                     <Text style={styles.fieldCaption}>原文</Text>
                   </View>
@@ -2004,10 +2101,14 @@ export default function App() {
                 {ocrCustomRules.map((rule) => (
                   <Pressable
                     key={rule.id}
-                    style={({ pressed }) => [styles.ruleListRowPress, pressed && styles.ruleListRowPressPressed]}
+                    style={({ pressed }) => [
+                      styles.ruleListRowPress,
+                      pressed && styles.ruleListRowPressPressed,
+                      modulePressOpacityStyle()
+                    ]}
                     onPress={() => openOcrRuleModalForEdit(rule)}
                   >
-                    <View style={styles.assetRow}>
+                    <View style={[styles.assetRow, styles.ruleListColumnsGap]}>
                       <View style={styles.ruleColSource}>
                         <View style={styles.ruleListCellBox}>
                           <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
@@ -2043,67 +2144,72 @@ export default function App() {
             ) : (
               <Text style={styles.muted}>暂无自定义规则。点击下方按钮添加。</Text>
             )}
-            <Pressable style={styles.securityActionButton} onPress={openOcrRuleModalForCreate}>
+            <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={openOcrRuleModalForCreate}>
               <Text style={styles.securityActionButtonText}>添加规则</Text>
             </Pressable>
           </View>
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.settingsLabel}>数据清理</Text>
-            <Text style={styles.muted}>
-              仅删除「已确认导入」的快照；自定义识别模块与自定义 OCR 规则不会被删除。操作不可恢复，请谨慎使用。
-            </Text>
-            <View style={styles.clearActionRowModal}>
-              <Pressable
-                style={styles.clearActionButtonBlue}
-                onPress={() => {
-                  setClearMode("today");
-                  setClearAllStep2(false);
-                }}
-              >
-                <Text style={styles.clearActionText}>清空今日</Text>
-              </Pressable>
-              <Pressable
-                style={styles.clearActionButtonDanger}
-                onPress={() => {
-                  setClearMode("all");
-                  setClearAllStep2(false);
-                }}
-              >
-                <Text style={styles.clearActionText}>清空全部导入</Text>
-              </Pressable>
+            <View style={styles.settingsDataCleanupRow}>
+              <View style={styles.settingsDataCleanupTitleCluster}>
+                <Text style={styles.settingsLabel} numberOfLines={1} ellipsizeMode="tail">
+                  数据清理
+                </Text>
+                {renderModuleInfoIcon("数据清理", MODULE_HINT_TEXT.dataCleanup, true)}
+              </View>
+              <View style={styles.clearActionRowModal}>
+                <Pressable
+                  style={[styles.clearActionButtonBlue, modulePressOpacityStyle()]}
+                  onPress={() => {
+                    setClearMode("today");
+                    setClearAllStep2(false);
+                  }}
+                >
+                  <Text style={styles.clearActionText}>清空今日</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.clearActionButtonDanger, modulePressOpacityStyle()]}
+                  onPress={() => {
+                    setClearMode("all");
+                    setClearAllStep2(false);
+                  }}
+                >
+                  <Text style={styles.clearActionText}>清空全部导入</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.settingsLabel}>内置模块测试数据</Text>
-            <Text style={styles.warn}>
-              写入测试数据会污染正常导入记录：模拟快照与真实数据合并，首页总资产与支付宝 / 招行 / 微信折线图都会受影响。请勿在日常记账时误触。
-            </Text>
-            <Text style={styles.muted}>
-              将写入约 20 个连续日期、三平台各一条递增金额的测试曲线（带测试标记）。清除时仅删除这些测试快照，不删真实导入。
-            </Text>
-            <View style={styles.settingsSeedActions}>
-              <Pressable
-                style={[
-                  styles.securityActionButton,
-                  (!dbReady || seedTestBusy) && styles.actionButtonDisabled
-                ]}
-                disabled={!dbReady || seedTestBusy}
-                onPress={promptWriteSeedTestData}
-              >
-                <Text style={styles.securityActionButtonText}>
-                  {seedTestBusy ? "处理中…" : "写入测试数据"}
+            <View style={styles.settingsDataCleanupRow}>
+              <View style={styles.settingsDataCleanupTitleCluster}>
+                <Text style={styles.settingsLabel} numberOfLines={1} ellipsizeMode="tail">
+                  测试数据
                 </Text>
-              </Pressable>
-              <Pressable
-                style={[
-                  styles.settingsSeedClearButton,
-                  (!dbReady || seedTestBusy) && styles.actionButtonDisabled
-                ]}
-                disabled={!dbReady || seedTestBusy}
-                onPress={promptClearSeedTestData}
-              >
-                <Text style={styles.settingsSeedClearButtonText}>清除测试数据</Text>
-              </Pressable>
+                {renderModuleInfoIcon("测试数据", MODULE_HINT_TEXT.seedTestData, true)}
+              </View>
+              <View style={styles.clearActionRowModal}>
+                <Pressable
+                  style={[
+                    styles.clearActionButtonBlue,
+                    modulePressOpacityStyle(!dbReady || seedTestBusy ? 0.45 : 1)
+                  ]}
+                  disabled={!dbReady || seedTestBusy}
+                  onPress={promptWriteSeedTestData}
+                >
+                  <Text style={styles.clearActionText}>
+                    {seedTestBusy ? "处理中…" : "写入测试数据"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.clearActionButtonDanger,
+                    modulePressOpacityStyle(!dbReady || seedTestBusy ? 0.45 : 1)
+                  ]}
+                  disabled={!dbReady || seedTestBusy}
+                  onPress={promptClearSeedTestData}
+                >
+                  <Text style={styles.clearActionText}>清除测试数据</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
           </ScrollView>
@@ -2121,10 +2227,13 @@ export default function App() {
           <ScrollView contentContainerStyle={styles.manageContent}>
             <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
               <View style={styles.sectionHeaderRow}>
-                <Text style={styles.cardTitle}>截图导入</Text>
+                <View style={[styles.cardTitleHintRow, styles.cardTitleHintRowGrow]}>
+                  <Text style={styles.cardTitle}>截图导入</Text>
+                  {renderModuleInfoIcon("截图导入", MODULE_HINT_TEXT.screenshotImport, true)}
+                </View>
                 <View style={styles.sectionHeaderActions}>
                   {selectedImageUris.length ? (
-                    <Pressable style={styles.retryButton} onPress={handleRetryRecognition}>
+                    <Pressable style={[styles.retryButton, modulePressOpacityStyle()]} onPress={handleRetryRecognition}>
                       <Text style={styles.retryButtonText}>{ocrLoading ? "识别中..." : "重新识别"}</Text>
                     </Pressable>
                   ) : null}
@@ -2142,7 +2251,7 @@ export default function App() {
                   >
                     <Image source={{ uri }} style={styles.previewTileImage} />
                     <Pressable
-                      style={styles.previewTileDelete}
+                      style={[styles.previewTileDelete, modulePressOpacityStyle()]}
                       hitSlop={8}
                       onPress={() => handleDeleteImportedImage(uri)}
                     >
@@ -2151,7 +2260,7 @@ export default function App() {
                   </Pressable>
                 ))}
                 {selectedImageUris.length < 6 ? (
-                  <Pressable style={styles.previewTileAdd} onPress={() => setSourceModalVisible(true)}>
+                  <Pressable style={[styles.previewTileAdd, modulePressOpacityStyle()]} onPress={() => setSourceModalVisible(true)}>
                     <Text style={styles.previewTileHint}>+ 导入</Text>
                   </Pressable>
                 ) : null}
@@ -2164,11 +2273,13 @@ export default function App() {
                 </View>
               ) : null}
               {dbInitError ? <Text style={styles.error}>数据库初始化失败：{dbInitError}</Text> : null}
-              <Text style={styles.muted}>识别后自动分类，可直接在下方修正。</Text>
             </View>
 
             <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
-              <Text style={styles.cardTitle}>解析结果（可修改）</Text>
+              <View style={[styles.cardTitleHintRow, styles.cardTitleHintRowGrow]}>
+                <Text style={styles.cardTitle}>解析结果（可修改）</Text>
+                {renderModuleInfoIcon("解析结果（可修改）", MODULE_HINT_TEXT.parseResult, true)}
+              </View>
               {groupedEditableAssets.map((group) => (
                 <View style={styles.parseGroup} key={group.uri}>
                   <View style={styles.parseGroupHeader}>
@@ -2180,7 +2291,7 @@ export default function App() {
                     {group.meta?.parseResult.screenDisplayLabel ??
                       SCREEN_TYPE_LABEL[group.meta?.parseResult.screenType ?? "unknown"]}
                   </Text>
-                  <Pressable style={styles.addRowButton} onPress={() => addManualAssetRow(group.uri)}>
+                  <Pressable style={[styles.addRowButton, modulePressOpacityStyle()]} onPress={() => addManualAssetRow(group.uri)}>
                     <Text style={styles.addRowButtonText}>+ 手动添加一行</Text>
                   </Pressable>
                   {group.assets.length ? (
@@ -2202,7 +2313,7 @@ export default function App() {
                         <View style={styles.assetNameColumn}>
                           <View style={styles.assetNameFieldWrap}>
                             <Pressable
-                              style={styles.assetNameClearPress}
+                              style={[styles.assetNameClearPress, modulePressOpacityStyle()]}
                               hitSlop={6}
                               onPress={() => confirmRemoveAssetRow(asset.localId)}
                             >
@@ -2231,7 +2342,7 @@ export default function App() {
                           {asset.amountError ? <Text style={styles.assetAmountErrorText}>{asset.amountError}</Text> : null}
                         </View>
                         <View style={styles.classPickerColumn}>
-                          <View style={styles.classPickerWrap}>
+                          <View style={[styles.classPickerWrap, modulePressOpacityStyle()]}>
                             <View style={styles.classDisplayRow}>
                               <Text
                                 style={[styles.classLabelText, styles.parseClassPickerLabel]}
@@ -2264,7 +2375,7 @@ export default function App() {
                   ))}
                   {group.meta?.rawOcrText ? (
                     <View style={styles.ocrDebugWrap}>
-                      <Pressable style={styles.addRowButton} onPress={() => toggleOcrText(group.uri)}>
+                      <Pressable style={[styles.addRowButton, modulePressOpacityStyle()]} onPress={() => toggleOcrText(group.uri)}>
                         <Text style={styles.addRowButtonText}>
                           {expandedOcrUris.includes(group.uri) ? "收起 OCR 原文" : "查看 OCR 原文"}
                         </Text>
@@ -2287,7 +2398,7 @@ export default function App() {
                   ) : null}
                 </View>
               ))}
-              <Pressable style={styles.confirmButton} onPress={handleConfirmSnapshot}>
+              <Pressable style={[styles.confirmButton, modulePressOpacityStyle()]} onPress={handleConfirmSnapshot}>
                 <Text style={styles.confirmButtonText}>{saveLoading ? "记录中..." : "确认并记录"}</Text>
               </Pressable>
               {saveNotice ? <Text style={styles.muted}>{saveNotice}</Text> : null}
@@ -2454,8 +2565,26 @@ const styles = StyleSheet.create({
   },
   clearActionRowModal: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "flex-end",
+    flexWrap: "nowrap",
+    flexShrink: 0,
     gap: 8
+  },
+  settingsDataCleanupRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "nowrap",
+    width: "100%",
+    gap: 8
+  },
+  settingsDataCleanupTitleCluster: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: "auto"
   },
   clearActionButtonBlue: {
     borderRadius: 999,
@@ -2472,12 +2601,6 @@ const styles = StyleSheet.create({
   clearActionButtonDanger: {
     borderRadius: 999,
     backgroundColor: "rgba(239,68,68,0.32)",
-    paddingHorizontal: 12,
-    paddingVertical: 6
-  },
-  clearActionButtonMuted: {
-    borderRadius: 999,
-    backgroundColor: "rgba(100,116,139,0.35)",
     paddingHorizontal: 12,
     paddingVertical: 6
   },
@@ -2535,6 +2658,94 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0
+  },
+  moduleHintPopoverCard: {
+    backgroundColor: "white",
+    borderRadius: 14,
+    padding: 14,
+    gap: 10,
+    maxWidth: 400,
+    width: "100%",
+    alignSelf: "center",
+    maxHeight: "72%"
+  },
+  moduleHintPopoverTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#163d7a"
+  },
+  moduleHintPopoverScroll: {
+    maxHeight: 320
+  },
+  moduleHintPopoverBody: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: "#334155"
+  },
+  moduleHintPopoverOk: {
+    borderRadius: 10,
+    backgroundColor: "#2563eb",
+    paddingVertical: 10,
+    alignItems: "center"
+  },
+  moduleHintPopoverOkText: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: 15
+  },
+  moduleInfoIconHit: {
+    width: 13,
+    height: 13,
+    borderRadius: 6.5,
+    borderWidth: 1,
+    borderColor: "#64748b",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.65)"
+  },
+  moduleInfoIconChar: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: "#475569",
+    marginTop: 0
+  },
+  settingsLabelHintRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  settingsSubLabelHintRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 6
+  },
+  sourceTitleHintRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 4
+  },
+  sourceTitleFlex: {
+    flex: 1
+  },
+  cardTitleHintRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 1,
+    minWidth: 0
+  },
+  cardTitleHintRowGrow: {
+    flex: 1,
+    minWidth: 0
+  },
+  trendHeaderTitleCluster: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 4
   },
   sourceSheet: {
     backgroundColor: "white",
@@ -3017,6 +3228,10 @@ const styles = StyleSheet.create({
     marginTop: 14,
     gap: 0
   },
+  /** 自定义 OCR 规则表：列与列之间增加 1px 间距 */
+  ruleListColumnsGap: {
+    gap: 1
+  },
   ruleColSource: {
     flex: 1.35,
     minWidth: 56
@@ -3046,7 +3261,7 @@ const styles = StyleSheet.create({
     borderColor: "#b7d4fb",
     borderWidth: 1,
     borderRadius: 8,
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     backgroundColor: "#f4f8ff",
     justifyContent: "center",
     overflow: "hidden"
@@ -3186,6 +3401,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700"
   },
+  platformHiddenGreenCapsule: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: "#16a34a",
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
+  platformHiddenGreenCapsuleText: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "700"
+  },
+  platformHiddenGreenCapsuleAction: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "700"
+  },
   customModuleVisiblePill: {
     flexDirection: "row",
     alignItems: "center",
@@ -3261,34 +3495,54 @@ const styles = StyleSheet.create({
   customModuleConfigSaveDisabled: {
     opacity: 0.55
   },
-  opacityRow: {
+  settingsOpacityBarRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8
+    gap: 10,
+    paddingVertical: 4
   },
-  opacityButton: {
-    borderRadius: 8,
-    backgroundColor: "#2563eb",
-    paddingHorizontal: 12,
-    paddingVertical: 8
-  },
-  opacityButtonText: {
-    color: "white",
+  settingsOpacityInlineLabel: {
+    color: "rgba(255,255,255,0.95)",
+    fontSize: 15,
     fontWeight: "700"
   },
-  opacitySliderWrap: {
+  opacityTrackTouch: {
     flex: 1,
+    minWidth: 0,
+    height: 30
+  },
+  opacityTrackClip: {
+    flex: 1,
+    height: 30,
+    borderRadius: 10,
+    overflow: "hidden",
+    position: "relative"
+  },
+  opacityTrackBg: {
+    ...StyleSheet.absoluteFillObject
+  },
+  opacityTrackFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderTopLeftRadius: 10,
+    borderBottomLeftRadius: 10,
+    maxWidth: "100%"
+  },
+  opacityPercentCenter: {
+    ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
-    paddingHorizontal: 4
+    alignItems: "center"
   },
-  opacityMarksRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: 72
-  },
-  opacityMarkText: {
-    color: "#4f76b3",
-    fontSize: 11
+  opacityTrackPercentText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#0f172a",
+    letterSpacing: 0.3,
+    textShadowColor: "rgba(255,255,255,0.85)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 3
   },
   securityActionButton: {
     borderRadius: 8,
@@ -3298,22 +3552,6 @@ const styles = StyleSheet.create({
   },
   securityActionButtonText: {
     color: "white",
-    fontWeight: "700"
-  },
-  settingsSeedActions: {
-    gap: 10,
-    marginTop: 8
-  },
-  settingsSeedClearButton: {
-    borderRadius: 8,
-    backgroundColor: "#f1f5f9",
-    paddingVertical: 10,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#cbd5e1"
-  },
-  settingsSeedClearButtonText: {
-    color: "#334155",
     fontWeight: "700"
   },
   customModuleWizardSafe: {
@@ -3330,11 +3568,19 @@ const styles = StyleSheet.create({
     borderBottomColor: "#bfdbfe",
     backgroundColor: "white"
   },
+  customModuleWizardTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: 8,
+    minWidth: 0,
+    marginRight: 8
+  },
   customModuleWizardTitle: {
     fontSize: 18,
     fontWeight: "700",
     color: "#163d7a",
-    flex: 1
+    flexShrink: 1
   },
   customModuleWizardHeaderCloseHit: {
     paddingVertical: 4,
