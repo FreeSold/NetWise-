@@ -40,7 +40,7 @@ import {
   queryCustomRecognitionTrendSeries,
   queryPlatformTrendSeries,
   queryCombinedLatestSummary,
-  queryTrendSeries,
+  queryStoredMainTrendAndHeroSummary,
   type PlatformTrendFilter,
   saveImportSnapshot,
   seedDefaultModuleTestData,
@@ -122,7 +122,7 @@ const MODULE_HINT_TEXT = {
   seedTestData:
     "写入测试数据会污染正常导入记录：模拟快照与真实数据合并，首页「目前为止总资产」与支付宝 / 招行 / 微信折线图都会受影响，请勿在日常记账时误触。\n\n将写入约 20 个连续日期、三平台各一条递增金额的测试曲线（带测试标记）。「清除测试数据」只删这些测试快照；「清空全部导入」会清空全部快照。",
   trendChart:
-    "右侧筛选可切换「全部」或按资产分类查看趋势。下方各卡片为单平台或自定义模块的历史曲线；点按图表可查看单日金额。",
+    "每张折线图卡片右侧均可切换「全部」或按资产分类；各卡片共用同一筛选，改一处即全部更新。主图为合并口径趋势，下方为单平台或自定义模块曲线；点按图表可查看单日金额。",
   screenshotImport:
     "最多可添加 6 张截图；点击缩略图可全屏预览，角标 × 可删除单张。识别完成后可在下方「解析结果」中修改金额与分类。\n\n识别后系统会按模板与规则自动分类，你可在确认保存前直接修正。",
   parseResult:
@@ -213,7 +213,8 @@ export default function App() {
     byClass: { cash: 0, fund: 0, insurance: 0, stock: 0, wealth_management: 0 }
   });
   const [trendFilter, setTrendFilter] = useState<TrendFilter>("all");
-  const [trendMenuVisible, setTrendMenuVisible] = useState(false);
+  /** 当前展开「折线类型」下拉的卡片 key，null 表示全关 */
+  const [trendMenuFor, setTrendMenuFor] = useState<string | null>(null);
   const [trendPoints, setTrendPoints] = useState<TrendPoint[]>([]);
   const [platformTrendPoints, setPlatformTrendPoints] = useState<Record<PlatformTrendFilter, TrendPoint[]>>({
     alipay: [],
@@ -281,6 +282,44 @@ export default function App() {
       </Pressable>
     );
   }
+
+  function renderTrendTypePicker(menuKey: string) {
+    const menuOpen = trendMenuFor === menuKey;
+    return (
+      <View style={styles.trendPickerArea}>
+        <Pressable
+          style={[styles.trendPickerWrap, modulePressOpacityStyle()]}
+          onPress={() => setTrendMenuFor((prev) => (prev === menuKey ? null : menuKey))}
+        >
+          <Text style={styles.trendPickerLabel}>{TREND_FILTER_LABEL[trendFilter]}</Text>
+          <Text style={styles.trendPickerArrow}>▼</Text>
+        </Pressable>
+        {menuOpen ? (
+          <View style={[styles.trendDropdownMenu, modulePressOpacityStyle()]}>
+            {TREND_FILTER_ORDER.map((f) => (
+              <Pressable
+                key={f}
+                style={[styles.trendDropdownItem, f === trendFilter ? styles.trendDropdownItemActive : null]}
+                onPress={() => {
+                  setTrendFilter(f);
+                  setTrendMenuFor(null);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.trendDropdownItemText,
+                    f === trendFilter ? styles.trendDropdownItemTextActive : null
+                  ]}
+                >
+                  {TREND_FILTER_LABEL[f]}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
+  }
   const visibleCustomRecognitionModules = customRecognitionModules.filter((m) => !hiddenCustomModuleIds.includes(m.id));
   const hiddenCustomRecognitionModules = customRecognitionModules.filter((m) => hiddenCustomModuleIds.includes(m.id));
   const currentImageHashes = importedImageMetas.map((item) => item.hash);
@@ -330,7 +369,7 @@ export default function App() {
       }
     }
     void loadTrend();
-  }, [dbReady, trendFilter]);
+  }, [dbReady, trendFilter, customRecognitionModules]);
 
   useEffect(() => {
     if (!appUnlocked) {
@@ -370,21 +409,7 @@ export default function App() {
       return;
     }
     void refreshTrendData(trendFilter);
-  }, [dbReady, appUnlocked, trendFilter, customRecognitionModules.length]);
-
-  useEffect(() => {
-    if (!dbReady) {
-      return;
-    }
-    void (async () => {
-      try {
-        const summary = await queryCombinedLatestSummary(customRecognitionModules);
-        setDailySummary(summary);
-      } catch (error) {
-        console.error("HOME_COMBINED_SUMMARY_FAILED", error);
-      }
-    })();
-  }, [dbReady, customRecognitionModules]);
+  }, [dbReady, appUnlocked, trendFilter, customRecognitionModules]);
 
   useEffect(() => {
     if (!dbReady || !appUnlocked) {
@@ -395,8 +420,6 @@ export default function App() {
         const seeded = await ensureDevClientSeedTestDataOnce();
         if (seeded) {
           await refreshTrendData(trendFilter);
-          const summary = await queryCombinedLatestSummary(customRecognitionModules);
-          setDailySummary(summary);
         }
       } catch (error) {
         console.warn("DEV_CLIENT_SEED_TEST_DATA_FAILED", error);
@@ -448,22 +471,23 @@ export default function App() {
   }
 
   async function refreshTrendData(filter: TrendFilter) {
-    const [mainPoints, alipayPoints, cmbPoints, wechatPoints, customPts] = await Promise.all([
-      queryTrendSeries(filter),
-      queryPlatformTrendSeries("alipay"),
-      queryPlatformTrendSeries("cmb"),
-      queryPlatformTrendSeries("wechat"),
+    const [{ mainTrend, heroSummary }, alipayPoints, cmbPoints, wechatPoints, customPts] = await Promise.all([
+      queryStoredMainTrendAndHeroSummary(filter, customRecognitionModules),
+      queryPlatformTrendSeries("alipay", filter),
+      queryPlatformTrendSeries("cmb", filter),
+      queryPlatformTrendSeries("wechat", filter),
       loadCustomRecognitionModules().then(async ({ modules }) => {
         const pts: Record<string, TrendPoint[]> = {};
         await Promise.all(
           modules.map(async (m) => {
-            pts[m.id] = await queryCustomRecognitionTrendSeries(m.keywords);
+            pts[m.id] = await queryCustomRecognitionTrendSeries(m.keywords, filter);
           })
         );
         return pts;
       })
     ]);
-    setTrendPoints(mainPoints);
+    setTrendPoints(mainTrend);
+    setDailySummary(heroSummary);
     setPlatformTrendPoints({
       alipay: alipayPoints,
       cmb: cmbPoints,
@@ -1176,8 +1200,6 @@ export default function App() {
       const result = await saveImportSnapshot(currentImageHashes, toSave, ocrTextsForSave);
       setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
       await refreshTrendData(trendFilter);
-      const summary = await queryCombinedLatestSummary(customRecognitionModules);
-      setDailySummary(summary);
       resetWorkingImport();
       setManageVisible(false);
     } catch (error) {
@@ -1201,8 +1223,6 @@ export default function App() {
       await clearAllImportHistory();
       setSaveNotice("已清空全部导入记录（自定义模块与 OCR 规则未改动）。");
     }
-    const summary = await queryCombinedLatestSummary(customRecognitionModules);
-    setDailySummary(summary);
     await refreshTrendData(trendFilter);
     resetWorkingImport();
     setClearMode(null);
@@ -1231,8 +1251,6 @@ export default function App() {
     try {
       await seedDefaultModuleTestData();
       await refreshTrendData(trendFilter);
-      const summary = await queryCombinedLatestSummary(customRecognitionModules);
-      setDailySummary(summary);
       Alert.alert(
         "已写入",
         "已生成支付宝 / 招行 / 微信各约 20 个时点的测试曲线。若不再需要，请到本页清除测试数据。"
@@ -1263,8 +1281,6 @@ export default function App() {
     try {
       const removed = await clearSeedTestData();
       await refreshTrendData(trendFilter);
-      const summary = await queryCombinedLatestSummary(customRecognitionModules);
-      setDailySummary(summary);
       Alert.alert("完成", removed > 0 ? `已清除 ${removed} 条测试快照。` : "当前没有测试快照。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知错误";
@@ -1883,49 +1899,35 @@ export default function App() {
                 {renderModuleInfoIcon("资金趋势折线图", MODULE_HINT_TEXT.trendChart, true)}
               </View>
             </View>
-            <View style={styles.trendPickerArea}>
-              <Pressable style={[styles.trendPickerWrap, modulePressOpacityStyle()]} onPress={() => setTrendMenuVisible((prev) => !prev)}>
-                <Text style={styles.trendPickerLabel}>{TREND_FILTER_LABEL[trendFilter]}</Text>
-                <Text style={styles.trendPickerArrow}>▼</Text>
-              </Pressable>
-              {trendMenuVisible ? (
-                <View style={[styles.trendDropdownMenu, modulePressOpacityStyle()]}>
-                  {TREND_FILTER_ORDER.map((filter) => (
-                    <Pressable
-                      key={filter}
-                      style={[styles.trendDropdownItem, filter === trendFilter ? styles.trendDropdownItemActive : null]}
-                      onPress={() => {
-                        setTrendFilter(filter);
-                        setTrendMenuVisible(false);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.trendDropdownItemText,
-                          filter === trendFilter ? styles.trendDropdownItemTextActive : null
-                        ]}
-                      >
-                        {TREND_FILTER_LABEL[filter]}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              ) : null}
-            </View>
+            {renderTrendTypePicker("trend-main")}
           </View>
-          <TrendLineChart points={trendPoints} />
+          <TrendLineChart points={trendPoints} chartTooltipOpacity={moduleControlOpacity} />
         </View>
 
         {visiblePlatformModules.map((platform) => (
           <View key={platform} style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.cardTitle}>{PLATFORM_TREND_LABEL[platform]}</Text>
-            <TrendLineChart points={platformTrendPoints[platform]} />
+            <View style={styles.trendHeaderRow}>
+              <View style={styles.trendHeaderTitleCluster}>
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  {PLATFORM_TREND_LABEL[platform]}
+                </Text>
+              </View>
+              {renderTrendTypePicker(`platform-${platform}`)}
+            </View>
+            <TrendLineChart points={platformTrendPoints[platform]} chartTooltipOpacity={moduleControlOpacity} />
           </View>
         ))}
         {visibleCustomRecognitionModules.map((m) => (
           <View key={m.id} style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
-            <Text style={styles.cardTitle}>{m.displayName}趋势</Text>
-            <TrendLineChart points={customModuleTrendPoints[m.id] ?? []} />
+            <View style={styles.trendHeaderRow}>
+              <View style={styles.trendHeaderTitleCluster}>
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  {m.displayName}趋势
+                </Text>
+              </View>
+              {renderTrendTypePicker(`cm-${m.id}`)}
+            </View>
+            <TrendLineChart points={customModuleTrendPoints[m.id] ?? []} chartTooltipOpacity={moduleControlOpacity} />
           </View>
         ))}
       </ScrollView>

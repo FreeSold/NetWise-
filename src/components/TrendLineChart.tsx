@@ -5,6 +5,8 @@ import type { TrendPoint } from "../storage/assetHistoryDb";
 
 type Props = {
   points: TrendPoint[];
+  /** 与设置页卡片透明度联动，浮窗不透明度（建议传 moduleControlOpacity，约 0.5～1） */
+  chartTooltipOpacity?: number;
 };
 
 const DISPLAY_POINT_CAP = 10;
@@ -180,7 +182,11 @@ function formatYTickLabel(n: number): string {
   return r.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 }
 
-export function TrendLineChart({ points }: Props) {
+const TOOLTIP_LAYOUT_HALF_W = 42;
+/** 气泡 + 三角总高度，使三角尖端落在数据点附近 */
+const TOOLTIP_LAYOUT_ABOVE_DOT = 42;
+
+export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
   const [width, setWidth] = useState(320);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const height = 180;
@@ -626,16 +632,23 @@ export function TrendLineChart({ points }: Props) {
             {activeDot ? (
               <View
                 style={[
-                  styles.tooltip,
+                  styles.tooltipCluster,
                   {
-                    left: Math.max(6, Math.min(activeDot.x - 84, computed.plotW - 168)),
-                    top: Math.max(6, activeDot.y - 56)
+                    left: Math.max(
+                      6,
+                      Math.min(activeDot.x - TOOLTIP_LAYOUT_HALF_W, computed.plotW - TOOLTIP_LAYOUT_HALF_W * 2 - 6)
+                    ),
+                    top: Math.max(6, activeDot.y - TOOLTIP_LAYOUT_ABOVE_DOT),
+                    opacity: chartTooltipOpacity
                   }
                 ]}
                 pointerEvents="none"
               >
-                <Text style={styles.tooltipDate}>{activeDot.date}</Text>
-                <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
+                <View style={styles.tooltipBubble}>
+                  <Text style={styles.tooltipDate}>{activeDot.date}</Text>
+                  <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
+                </View>
+                <View style={styles.tooltipCaret} />
               </View>
             ) : null}
           </Animated.View>
@@ -810,31 +823,51 @@ const styles = StyleSheet.create({
     color: "#4f76b3",
     fontSize: 12
   },
-  tooltip: {
+  tooltipCluster: {
     position: "absolute",
     zIndex: 20,
-    borderRadius: 10,
+    alignItems: "center"
+  },
+  /** 相对原尺寸约 70% */
+  tooltipBubble: {
+    borderRadius: 7,
     backgroundColor: "rgba(255,255,255,0.94)",
     borderWidth: 1,
     borderColor: "rgba(37,99,235,0.22)",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    minWidth: 112,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    minWidth: 78,
+    alignItems: "center",
     shadowColor: "#1e3a5f",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    elevation: 4
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.16,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  /** 指向下侧数据点的三角 */
+  tooltipCaret: {
+    marginTop: -1,
+    width: 0,
+    height: 0,
+    borderStyle: "solid",
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderTopWidth: 6,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderTopColor: "rgba(255,255,255,0.94)"
   },
   tooltipDate: {
     color: "#64748b",
-    fontSize: 11,
-    marginBottom: 2
+    fontSize: 8,
+    lineHeight: 11,
+    marginBottom: 1
   },
   tooltipAmount: {
     color: "#163d7a",
     fontWeight: "700",
-    fontSize: 16
+    fontSize: 11,
+    lineHeight: 14
   },
   emptyWrap: {
     borderWidth: 1,

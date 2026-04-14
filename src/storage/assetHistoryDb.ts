@@ -123,31 +123,67 @@ export async function saveImportSnapshot(
   return { saved: true, date };
 }
 
-export async function queryTrendSeries(filter: TrendFilter): Promise<TrendPoint[]> {
-  const snapshots = await readAllSnapshots();
-  const totalsByDate = new Map<string, number>();
+function buildMainTrendSeriesFromSnapshots(
+  snapshots: SnapshotRecord[],
+  filter: TrendFilter,
+  customModules: { id: string; keywords: string[] }[]
+): TrendPoint[] {
+  const withAssets = snapshots.filter((s) => s.assets.length);
+  const uniqueDates = [...new Set(withAssets.map((s) => s.importDate))].sort((a, b) => a.localeCompare(b));
 
-  for (const snapshot of snapshots) {
-    const snapshotTotal = snapshot.assets.reduce((sum, asset) => {
-      if (filter !== "all" && asset.assetClass !== filter) {
-        return sum;
-      }
-      return sum + (Number.isFinite(asset.amount) ? asset.amount : 0);
-    }, 0);
-    totalsByDate.set(snapshot.date, roundMoney((totalsByDate.get(snapshot.date) ?? 0) + snapshotTotal));
-  }
-
-  return [...totalsByDate.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([date, total]) => ({ date, total: roundMoney(total) }));
+  return uniqueDates.map((date) => {
+    const pool = snapshots.filter((s) => s.importDate <= date && s.assets.length);
+    const { total } = combinedSummaryFromSnapshotList(pool, customModules, filter);
+    return { date, total };
+  });
 }
 
-export async function queryPlatformTrendSeries(platform: PlatformTrendFilter): Promise<TrendPoint[]> {
+/**
+ * 主资金趋势：每个日期点为「截至该日（含）」按首页同款规则合并后的总资产（或指定资产类别合计）。
+ * 数据与顶部「目前为止总资产」同源（持久化快照列表），由存储计算，并非先画线再反推合计。
+ */
+export async function queryTrendSeries(
+  filter: TrendFilter,
+  customModules: { id: string; keywords: string[] }[] = []
+): Promise<TrendPoint[]> {
+  const store = await readStore();
+  return buildMainTrendSeriesFromSnapshots(store.snapshots, filter, customModules);
+}
+
+/**
+ * 单次读盘同时得到主折线序列与首页「目前为止总资产」。
+ * 二者均由同一快照列表按规则独立算出，并列展示；折线末点与 hero 合计在「全部」筛选下口径一致。
+ */
+export async function queryStoredMainTrendAndHeroSummary(
+  mainTrendFilter: TrendFilter,
+  customModules: { id: string; keywords: string[] }[]
+): Promise<{ mainTrend: TrendPoint[]; heroSummary: DailySummary }> {
+  const store = await readStore();
+  const mainTrend = buildMainTrendSeriesFromSnapshots(store.snapshots, mainTrendFilter, customModules);
+  const { total, byClass } = combinedSummaryFromSnapshotList(store.snapshots, customModules, "all");
+  return {
+    mainTrend,
+    heroSummary: { date: "combined-latest", total, byClass }
+  };
+}
+
+export async function queryPlatformTrendSeries(
+  platform: PlatformTrendFilter,
+  filter: TrendFilter = "all"
+): Promise<TrendPoint[]> {
   const snapshots = await readAllSnapshots();
   const totalsByDate = new Map<string, number>();
 
   for (const snapshot of snapshots) {
-    const platformAssets = snapshot.assets.filter((asset) => belongsToPlatform(asset.source, platform));
+    const platformAssets = snapshot.assets.filter((asset) => {
+      if (!belongsToPlatform(asset.source, platform)) {
+        return false;
+      }
+      if (filter !== "all" && asset.assetClass !== filter) {
+        return false;
+      }
+      return true;
+    });
     if (!platformAssets.length) {
       continue;
     }
@@ -163,8 +199,11 @@ export async function queryPlatformTrendSeries(platform: PlatformTrendFilter): P
     .map(([date, total]) => ({ date, total: roundMoney(total) }));
 }
 
-/** 自定义识别模块：快照仅含自定义规则解析的资产、且 OCR 命中关键词时计入趋势（与内置平台导入互斥） */
-export async function queryCustomRecognitionTrendSeries(keywords: string[]): Promise<TrendPoint[]> {
+/** 自定义识别模块趋势：OCR 命中模块关键词时计入；若同图还被内置模板解析出资产，只累加自定义规则产出的 `source===custom` 部分，避免误判内置页时模块整条为空。 */
+export async function queryCustomRecognitionTrendSeries(
+  keywords: string[],
+  filter: TrendFilter = "all"
+): Promise<TrendPoint[]> {
   const compactKws = keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
   if (!compactKws.length) {
     return [];
@@ -177,17 +216,17 @@ export async function queryCustomRecognitionTrendSeries(keywords: string[]): Pro
     if (!snapshot.assets.length) {
       continue;
     }
-    if (snapshotHasBuiltInTemplateAssets(snapshot)) {
+    if (!snapshotOcrMatchesCustomModuleKeywords(snapshot, compactKws)) {
       continue;
     }
-    const compact = buildSnapshotOcrCompact(snapshot.ocrTexts);
-    if (!keywordsAnyMatchInCompactOcr(compact, compactKws)) {
+    if (snapshotHasBuiltInTemplateAssets(snapshot) && !snapshot.assets.some((a) => a.source === "custom")) {
       continue;
     }
-    const snapshotTotal = snapshot.assets.reduce(
-      (sum, asset) => sum + (Number.isFinite(asset.amount) ? asset.amount : 0),
-      0
-    );
+    const byPart = sumAssetsForCustomModuleContribution(snapshot);
+    const snapshotTotal =
+      filter === "all"
+        ? roundMoney(Object.values(byPart).reduce((sum, value) => sum + value, 0))
+        : roundMoney(byPart[filter]);
     if (snapshotTotal > 0) {
       totalsByDate.set(
         snapshot.importDate,
@@ -252,44 +291,44 @@ function mergeByClassTotals(target: Record<AssetClass, number>, part: Record<Ass
   });
 }
 
-function findLatestPlatformSnapshot(store: StorePayload, platform: PlatformTrendFilter): SnapshotRecord | null {
-  const candidates = store.snapshots.filter(
+function findLatestPlatformSnapshotInList(snapshots: SnapshotRecord[], platform: PlatformTrendFilter): SnapshotRecord | null {
+  const candidates = snapshots.filter(
     (snap) => snap.assets.length && snap.assets.some((asset) => belongsToPlatform(asset.source, platform))
   );
   return pickLatestSnapshot(candidates);
 }
 
-function findLatestCustomModuleSnapshot(store: StorePayload, keywords: string[]): SnapshotRecord | null {
+function findLatestCustomModuleSnapshotInList(snapshots: SnapshotRecord[], keywords: string[]): SnapshotRecord | null {
   const compactKws = keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
   if (!compactKws.length) {
     return null;
   }
-  const candidates = store.snapshots.filter((snap) => {
+  const candidates = snapshots.filter((snap) => {
     if (!snap.assets.length) {
       return false;
     }
-    if (snapshotHasBuiltInTemplateAssets(snap)) {
+    if (!snapshotOcrMatchesCustomModuleKeywords(snap, compactKws)) {
       return false;
     }
-    const compact = buildSnapshotOcrCompact(snap.ocrTexts);
-    return keywordsAnyMatchInCompactOcr(compact, compactKws);
+    if (snapshotHasBuiltInTemplateAssets(snap)) {
+      return snap.assets.some((a) => a.source === "custom");
+    }
+    return true;
   });
   return pickLatestSnapshot(candidates);
 }
 
-/**
- * 首页「目前为止总资产」：支付宝 / 招行 / 微信各自取「含有该平台资产的最近一次导入」中该平台资产之和；
- * 每个自定义识别模块取「仅自定义解析、且 OCR 命中关键词的最近一次导入」的该次快照资产总额（与模块折线图口径一致）；再按资产类别合并。
- */
-export async function queryCombinedLatestSummary(
-  customModules: { id: string; keywords: string[] }[]
-): Promise<DailySummary> {
-  const store = await readStore();
+/** 与 queryCombinedLatestSummary 相同合并规则，但仅从给定快照列表中选取「最新」 */
+function combinedSummaryFromSnapshotList(
+  snapshots: SnapshotRecord[],
+  customModules: { id: string; keywords: string[] }[],
+  filter: TrendFilter
+): { total: number; byClass: Record<AssetClass, number> } {
   const byClass = emptyByClassTotals();
   const platforms: PlatformTrendFilter[] = ["alipay", "cmb", "wechat"];
 
   for (const platform of platforms) {
-    const snap = findLatestPlatformSnapshot(store, platform);
+    const snap = findLatestPlatformSnapshotInList(snapshots, platform);
     if (!snap) {
       continue;
     }
@@ -298,15 +337,30 @@ export async function queryCombinedLatestSummary(
   }
 
   for (const mod of customModules) {
-    const snap = findLatestCustomModuleSnapshot(store, mod.keywords);
+    const snap = findLatestCustomModuleSnapshotInList(snapshots, mod.keywords);
     if (!snap) {
       continue;
     }
-    const part = sumAssetsByClass(snap.assets);
-    mergeByClassTotals(byClass, part);
+    mergeByClassTotals(byClass, sumAssetsForCustomModuleContribution(snap));
   }
 
-  const total = roundMoney(Object.values(byClass).reduce((sum, value) => sum + value, 0));
+  const total =
+    filter === "all"
+      ? roundMoney(Object.values(byClass).reduce((sum, value) => sum + value, 0))
+      : roundMoney(byClass[filter]);
+  return { total, byClass };
+}
+
+/**
+ * 首页「目前为止总资产」：从持久化快照列表按规则合并（与主资金折线图数据源相同，非由折线反算）。
+ * 支付宝 / 招行 / 微信各自取「含有该平台资产的最近一次导入」中该平台资产之和；
+ * 每个自定义识别模块取 OCR 命中关键词的最近一次导入：纯自定义来源快照计全额，与内置模板混排时仅计 `source===custom`（与模块折线图口径一致）；再按资产类别合并。
+ */
+export async function queryCombinedLatestSummary(
+  customModules: { id: string; keywords: string[] }[]
+): Promise<DailySummary> {
+  const store = await readStore();
+  const { total, byClass } = combinedSummaryFromSnapshotList(store.snapshots, customModules, "all");
   return { date: "combined-latest", total, byClass };
 }
 
@@ -468,9 +522,24 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** 快照已由内置模板解析出招行/支付宝/微信等资产时，同一导入不再计入自定义识别模块趋势（避免 OCR 含关键词时双计） */
+/** 快照中是否存在内置模板解析出的资产（非自定义 OCR 规则） */
 function snapshotHasBuiltInTemplateAssets(snapshot: SnapshotRecord): boolean {
   return snapshot.assets.some((a) => a.source !== "custom");
+}
+
+function snapshotOcrMatchesCustomModuleKeywords(snapshot: SnapshotRecord, compactKws: string[]): boolean {
+  const compact = buildSnapshotOcrCompact(snapshot.ocrTexts);
+  return keywordsAnyMatchInCompactOcr(compact, compactKws);
+}
+
+/**
+ * 自定义识别模块在合并汇总 / 趋势中的金额：无内置资产时整张快照归属该次导入；有内置资产时只取自定义规则行，避免与平台拆解重复。
+ */
+function sumAssetsForCustomModuleContribution(snapshot: SnapshotRecord): Record<AssetClass, number> {
+  if (snapshotHasBuiltInTemplateAssets(snapshot)) {
+    return sumAssetsByClass(snapshot.assets, (a) => a.source === "custom");
+  }
+  return sumAssetsByClass(snapshot.assets);
 }
 
 function belongsToPlatform(source: ScreenType, platform: PlatformTrendFilter): boolean {
