@@ -52,15 +52,17 @@ export type OcrCustomRule = {
 
 export interface ParseResult {
   screenType: ScreenType | "unknown";
+  /** 解析结果页「页面类型」优先展示此文案（如未识别到内置页但命中自定义模块时的模块名） */
+  screenDisplayLabel?: string;
   assets: ParsedAsset[];
   reportedTotal?: number;
   warnings: string[];
 }
 
-/** 用户自定义「识别模块」：按关键词在当日 OCR 中同时命中（去空白后子串）时，将该次导入资产总额计入该模块趋势 */
+/** 用户自定义「识别模块」：按关键词在合并 OCR 中任一命中（去空白后子串匹配）时，将该次导入资产总额计入该模块趋势 */
 export type CustomRecognitionModule = {
   id: string;
   displayName: string;
-  /** 须全部出现在合并 OCR 中的片段（保存为分割后的词/词组） */
+  /** 多个条件为「或」关系；保存为按空格/逗号/分号拆分后的词或词组 */
   keywords: string[];
 };

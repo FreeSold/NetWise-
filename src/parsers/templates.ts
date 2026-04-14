@@ -174,6 +174,18 @@ function firstNumberAfterAnchorInCompact(compactLine: string, anchorCompact: str
   return parseMoney(m[0]);
 }
 
+/** 与自定义模块趋势、规则作用域一致：合并 OCR 去空白后，任一关键词子串命中即视为该模块匹配 */
+function matchingCustomModuleDisplayLabels(compactOcr: string, modules: CustomRecognitionModule[]): string[] {
+  const labels: string[] = [];
+  for (const mod of modules) {
+    const kws = mod.keywords.map((k) => compactForMatch(k.trim())).filter(Boolean);
+    if (kws.length && kws.some((k) => compactOcr.includes(k))) {
+      labels.push(mod.displayName);
+    }
+  }
+  return labels;
+}
+
 function ruleScreenScopeAllows(
   rule: OcrCustomRule,
   detectedScreen: ParseResult["screenType"],
@@ -186,13 +198,17 @@ function ruleScreenScopeAllows(
     return true;
   }
   if (typeof scope === "string" && scope.startsWith(OCR_CUSTOM_MODULE_SCOPE_PREFIX)) {
+    // 已识别为内置 App 页面时，资产只归该平台；不再用「仅某自定义模块」规则重复抽金额
+    if (detectedScreen !== "unknown") {
+      return false;
+    }
     const moduleId = scope.slice(OCR_CUSTOM_MODULE_SCOPE_PREFIX.length);
     const mod = customModuleById.get(moduleId);
     if (!mod?.keywords.length) {
       return false;
     }
     const compactKws = mod.keywords.map((k) => compactForMatch(k.trim())).filter(Boolean);
-    return compactKws.length > 0 && compactKws.every((k) => compactOcr.includes(k));
+    return compactKws.length > 0 && compactKws.some((k) => compactOcr.includes(k));
   }
   if (scope === "alipay") {
     return detectedScreen === "alipay_wealth" || detectedScreen === "alipay_fund";
@@ -420,6 +436,9 @@ export function parseOcrText(
   const lines = toLines(raw);
   const screenType = detectScreenType(compactText);
   const customAssets = parseCustomRules(raw, customRules, screenType, customRecognitionModules);
+  const matchedModuleLabels = matchingCustomModuleDisplayLabels(compactText, customRecognitionModules);
+  const screenDisplayLabelForUnknown =
+    screenType === "unknown" && matchedModuleLabels.length > 0 ? matchedModuleLabels.join("、") : undefined;
 
   if (screenType === "unknown") {
     const warnings: string[] = [];
@@ -428,6 +447,7 @@ export function parseOcrText(
     }
     return {
       screenType,
+      ...(screenDisplayLabelForUnknown ? { screenDisplayLabel: screenDisplayLabelForUnknown } : {}),
       assets: customAssets,
       reportedTotal: parseReportedTotal(lines),
       warnings

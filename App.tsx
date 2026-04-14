@@ -32,7 +32,7 @@ import {
   verifyAppPasscode
 } from "./src/security/appSecurity";
 import {
-  clearAllData,
+  clearAllImportHistory,
   clearCurrentDateData,
   clearSeedTestData,
   type DailySummary,
@@ -40,7 +40,7 @@ import {
   initAssetHistoryDb,
   queryCustomRecognitionTrendSeries,
   queryPlatformTrendSeries,
-  queryDailySummary,
+  queryCombinedLatestSummary,
   queryTrendSeries,
   type PlatformTrendFilter,
   saveImportSnapshot,
@@ -211,10 +211,18 @@ export default function App() {
   const [wizardOcrLoading, setWizardOcrLoading] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
   const [customModuleNotice, setCustomModuleNotice] = useState<string | null>(null);
+  const [customModuleConfigVisible, setCustomModuleConfigVisible] = useState(false);
+  const [customModuleConfigEditingId, setCustomModuleConfigEditingId] = useState<string | null>(null);
+  const [editCmDisplayName, setEditCmDisplayName] = useState("");
+  const [editCmKeywordsText, setEditCmKeywordsText] = useState("");
+  const [editCmError, setEditCmError] = useState<string | null>(null);
+  const [editCmSaving, setEditCmSaving] = useState(false);
 
   const cashAmount = dailySummary.byClass.cash;
   const fundAmount = dailySummary.byClass.fund;
   const insuranceAmount = dailySummary.byClass.insurance;
+  const stockAmount = dailySummary.byClass.stock;
+  const wealthManagementAmount = dailySummary.byClass.wealth_management;
   const cardBackgroundColor = `rgba(255,255,255,${Math.max(0.3, Math.min(1, cardOpacityPercent / 100))})`;
   const hiddenPlatformModules = PLATFORM_TREND_ORDER.filter((platform) => !visiblePlatformModules.includes(platform));
   const visibleCustomRecognitionModules = customRecognitionModules.filter((m) => !hiddenCustomModuleIds.includes(m.id));
@@ -241,7 +249,7 @@ export default function App() {
     async function setupDb() {
       try {
         await initAssetHistoryDb();
-        const summary = await queryDailySummary();
+        const summary = await queryCombinedLatestSummary([]);
         setDailySummary(summary);
         setDbReady(true);
         setDbInitError(null);
@@ -309,6 +317,20 @@ export default function App() {
   }, [dbReady, appUnlocked, trendFilter, customRecognitionModules.length]);
 
   useEffect(() => {
+    if (!dbReady) {
+      return;
+    }
+    void (async () => {
+      try {
+        const summary = await queryCombinedLatestSummary(customRecognitionModules);
+        setDailySummary(summary);
+      } catch (error) {
+        console.error("HOME_COMBINED_SUMMARY_FAILED", error);
+      }
+    })();
+  }, [dbReady, customRecognitionModules]);
+
+  useEffect(() => {
     if (!dbReady || !appUnlocked) {
       return;
     }
@@ -317,14 +339,14 @@ export default function App() {
         const seeded = await ensureDevClientSeedTestDataOnce();
         if (seeded) {
           await refreshTrendData(trendFilter);
-          const summary = await queryDailySummary();
+          const summary = await queryCombinedLatestSummary(customRecognitionModules);
           setDailySummary(summary);
         }
       } catch (error) {
         console.warn("DEV_CLIENT_SEED_TEST_DATA_FAILED", error);
       }
     })();
-  }, [dbReady, appUnlocked, trendFilter]);
+  }, [dbReady, appUnlocked, trendFilter, customRecognitionModules]);
 
   async function computeImageHash(uri: string): Promise<string> {
     const base64Payload = await FileSystem.readAsStringAsync(uri, {
@@ -645,6 +667,99 @@ export default function App() {
     const nextHidden = loaded.hiddenIds.filter((id) => id !== moduleId);
     setHiddenCustomModuleIds(nextHidden);
     await saveCustomRecognitionModules({ modules: loaded.modules, hiddenIds: nextHidden });
+  }
+
+  function openCustomModuleConfig(m: CustomRecognitionModule) {
+    setEditCmError(null);
+    setCustomModuleConfigEditingId(m.id);
+    setEditCmDisplayName(m.displayName);
+    setEditCmKeywordsText(m.keywords.join(" "));
+    setCustomModuleConfigVisible(true);
+  }
+
+  function closeCustomModuleConfig() {
+    setCustomModuleConfigVisible(false);
+    setCustomModuleConfigEditingId(null);
+    setEditCmDisplayName("");
+    setEditCmKeywordsText("");
+    setEditCmError(null);
+  }
+
+  async function saveCustomModuleConfig() {
+    const id = customModuleConfigEditingId;
+    if (!id) {
+      return;
+    }
+    const name = editCmDisplayName.trim();
+    const keywords = splitRecognitionKeywords(editCmKeywordsText);
+    if (!name) {
+      setEditCmError("请填写模块展示名称。");
+      return;
+    }
+    if (!keywords.length) {
+      setEditCmError("请至少填写一个匹配用词（可用空格、逗号、分号分隔）。");
+      return;
+    }
+    setEditCmSaving(true);
+    setEditCmError(null);
+    try {
+      const loaded = await loadCustomRecognitionModules();
+      const idx = loaded.modules.findIndex((x) => x.id === id);
+      if (idx < 0) {
+        setEditCmError("模块已不存在，请关闭后重试。");
+        return;
+      }
+      const nextModules = [...loaded.modules];
+      nextModules[idx] = { id, displayName: name, keywords };
+      await saveCustomRecognitionModules({ modules: nextModules, hiddenIds: loaded.hiddenIds });
+      setCustomRecognitionModules(nextModules);
+      setHiddenCustomModuleIds(loaded.hiddenIds);
+      await refreshTrendData(trendFilter);
+      setCustomModuleNotice("已保存模块修改。");
+      setTimeout(() => setCustomModuleNotice(null), 2000);
+      closeCustomModuleConfig();
+    } catch (error) {
+      setEditCmError(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setEditCmSaving(false);
+    }
+  }
+
+  function confirmDeleteCustomModule() {
+    const id = customModuleConfigEditingId;
+    if (!id) {
+      return;
+    }
+    const name = editCmDisplayName.trim() || "该模块";
+    Alert.alert(
+      "删除自定义模块",
+      `确定删除「${name}」吗？绑定「仅该模块」的 OCR 规则将变成无效引用，请到规则列表中自行调整。`,
+      [
+        { text: "取消", style: "cancel" },
+        { text: "删除", style: "destructive", onPress: () => void executeDeleteCustomModule(id) }
+      ]
+    );
+  }
+
+  async function executeDeleteCustomModule(id: string) {
+    setEditCmSaving(true);
+    setEditCmError(null);
+    try {
+      const loaded = await loadCustomRecognitionModules();
+      const nextModules = loaded.modules.filter((x) => x.id !== id);
+      const nextHidden = loaded.hiddenIds.filter((hid) => hid !== id);
+      await saveCustomRecognitionModules({ modules: nextModules, hiddenIds: nextHidden });
+      setCustomRecognitionModules(nextModules);
+      setHiddenCustomModuleIds(nextHidden);
+      await refreshTrendData(trendFilter);
+      setCustomModuleNotice("已删除该模块。");
+      setTimeout(() => setCustomModuleNotice(null), 2000);
+      closeCustomModuleConfig();
+    } catch (error) {
+      setEditCmError(error instanceof Error ? error.message : "删除失败");
+    } finally {
+      setEditCmSaving(false);
+    }
   }
 
   function resetCustomModuleWizard() {
@@ -1005,7 +1120,7 @@ export default function App() {
       const result = await saveImportSnapshot(currentImageHashes, toSave, ocrTextsForSave);
       setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
       await refreshTrendData(trendFilter);
-      const summary = await queryDailySummary();
+      const summary = await queryCombinedLatestSummary(customRecognitionModules);
       setDailySummary(summary);
       resetWorkingImport();
       setManageVisible(false);
@@ -1027,10 +1142,10 @@ export default function App() {
         setClearAllStep2(true);
         return;
       }
-      await clearAllData();
-      setSaveNotice("已清空全部数据。");
+      await clearAllImportHistory();
+      setSaveNotice("已清空全部导入记录（自定义模块与 OCR 规则未改动）。");
     }
-    const summary = await queryDailySummary();
+    const summary = await queryCombinedLatestSummary(customRecognitionModules);
     setDailySummary(summary);
     await refreshTrendData(trendFilter);
     resetWorkingImport();
@@ -1038,43 +1153,66 @@ export default function App() {
     setClearAllStep2(false);
   }
 
-  async function handleSeedDefaultModuleTest() {
+  function promptWriteSeedTestData() {
+    if (!dbReady || seedTestBusy) {
+      return;
+    }
+    Alert.alert(
+      "确认写入测试数据？",
+      "将在你的导入记录中插入约 20 天的模拟快照，与真实导入混在一起，首页「目前为止总资产」和三平台折线图都会受影响，容易造成误判。仅建议在明确调试时使用。\n\n可通过本页「清除测试数据」移除测试快照，或使用「清空全部导入」清空全部记录。",
+      [
+        { text: "取消", style: "cancel" },
+        { text: "仍要写入", style: "destructive", onPress: () => void executeWriteSeedTestData() }
+      ]
+    );
+  }
+
+  async function executeWriteSeedTestData() {
     if (!dbReady || seedTestBusy) {
       return;
     }
     setSeedTestBusy(true);
-    setSaveNotice(null);
     try {
       await seedDefaultModuleTestData();
-      setSaveNotice(
-        "已写入内置模块测试数据：支付宝 / 招行 / 微信各 20 个时点，金额自 0 元起每档 +1 万。可用「清除测试数据」或「清空全部」移除。"
-      );
       await refreshTrendData(trendFilter);
-      const summary = await queryDailySummary();
+      const summary = await queryCombinedLatestSummary(customRecognitionModules);
       setDailySummary(summary);
+      Alert.alert(
+        "已写入",
+        "已生成支付宝 / 招行 / 微信各约 20 个时点的测试曲线。若不再需要，请到本页清除测试数据。"
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知错误";
-      setSaveNotice(`写入测试数据失败：${message}`);
+      Alert.alert("写入失败", message);
     } finally {
       setSeedTestBusy(false);
     }
   }
 
-  async function handleClearSeedTest() {
+  function promptClearSeedTestData() {
+    if (!dbReady || seedTestBusy) {
+      return;
+    }
+    Alert.alert("清除测试数据？", "将删除所有带测试标记的快照，不会影响其它真实导入记录。", [
+      { text: "取消", style: "cancel" },
+      { text: "清除", onPress: () => void executeClearSeedTestData() }
+    ]);
+  }
+
+  async function executeClearSeedTestData() {
     if (!dbReady || seedTestBusy) {
       return;
     }
     setSeedTestBusy(true);
-    setSaveNotice(null);
     try {
       const removed = await clearSeedTestData();
-      setSaveNotice(removed > 0 ? `已清除 ${removed} 条测试快照。` : "当前没有测试快照。");
       await refreshTrendData(trendFilter);
-      const summary = await queryDailySummary();
+      const summary = await queryCombinedLatestSummary(customRecognitionModules);
       setDailySummary(summary);
+      Alert.alert("完成", removed > 0 ? `已清除 ${removed} 条测试快照。` : "当前没有测试快照。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知错误";
-      setSaveNotice(`清除测试数据失败：${message}`);
+      Alert.alert("清除失败", message);
     } finally {
       setSeedTestBusy(false);
     }
@@ -1274,12 +1412,12 @@ export default function App() {
           />
           <View style={styles.sourceSheet}>
             <Text style={styles.sourceTitle}>
-              {clearMode === "all" && clearAllStep2 ? "再次确认：清空全部数据？" : "确认清空数据？"}
+              {clearMode === "all" && clearAllStep2 ? "再次确认：清空全部导入记录？" : "确认清空数据？"}
             </Text>
             <Text style={styles.muted}>
               {clearMode === "today"
                 ? "将删除当前日期的所有已确认导入记录。"
-                : "将删除全部历史记录。此操作不可恢复。"}
+                : "将删除所有日期的已确认导入快照（首页与折线图将基于空数据）。不会删除设置中的自定义识别模块与自定义 OCR 规则。此操作不可恢复。"}
             </Text>
             <Pressable style={styles.sheetButton} onPress={handleClearData}>
               <Text style={styles.sheetButtonText}>{clearMode === "all" && !clearAllStep2 ? "下一步确认" : "确认清空"}</Text>
@@ -1467,7 +1605,7 @@ export default function App() {
             {wizardStep === 3 ? (
               <View style={styles.customModuleWizardStepBody}>
                 <Text style={styles.muted}>
-                  编辑识别用词，可用空格、英文/中文逗号、分号分隔多个词。之后每次保存导入时，合并 OCR 须同时包含以下全部片段，该次导入的资产总额才会计入本模块趋势。
+                  编辑识别用词，可用空格、英文/中文逗号、分号分隔多个词。多个词为「或」关系：合并 OCR 中只要命中其中任意一个片段，该次导入的资产总额即会计入本模块趋势。
                 </Text>
                 <TextInput
                   value={wizardKeywordsText}
@@ -1499,10 +1637,10 @@ export default function App() {
             {wizardStep === 5 ? (
               <View style={styles.customModuleWizardStepBody}>
                 <Text style={styles.line}>模块名称：{wizardModuleName.trim() || "—"}</Text>
-                <Text style={styles.line}>须同时匹配的关键词：</Text>
+                <Text style={styles.line}>匹配用词（任一命中即可）：</Text>
                 <Text style={styles.muted}>{splitRecognitionKeywords(wizardKeywordsText).join(" · ") || "—"}</Text>
                 <Text style={styles.muted}>
-                  提交后，新导入在「确认并记录」时会写入 OCR；仅当某日快照的 OCR 同时包含上述全部词时，该日该次导入解析出的资产总额会计入此模块折线图（与内置微信/支付宝/招行模块并列）。
+                  提交后，新导入在「确认并记录」时会写入 OCR；当某日快照的合并 OCR 命中上述任一词时，该日该次导入解析出的资产总额会计入此模块折线图（与内置微信/支付宝/招行模块并列）。
                 </Text>
               </View>
             ) : null}
@@ -1531,10 +1669,72 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
+      <Modal visible={customModuleConfigVisible} animationType="slide" onRequestClose={closeCustomModuleConfig}>
+        <SafeAreaView style={styles.customModuleWizardSafe}>
+          <View style={styles.customModuleWizardHeader}>
+            <Text style={styles.customModuleWizardTitle}>配置识别模块</Text>
+            <Pressable style={styles.customModuleWizardHeaderCloseHit} onPress={closeCustomModuleConfig} hitSlop={12}>
+              <Text style={styles.customModuleWizardCloseText}>关闭</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            style={styles.customModuleWizardScrollFlex}
+            contentContainerStyle={styles.customModuleWizardScroll}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {editCmError ? <Text style={[styles.warn, styles.customModuleWizardErr]}>{editCmError}</Text> : null}
+            <Text style={styles.muted}>
+              修改展示名称与匹配用词。多个词为「或」关系。标签上的 × / + 仅控制是否在首页展示该模块折线图，点此区域外的主体可打开本页。
+            </Text>
+            <Text style={styles.settingsSubLabel}>模块展示名称</Text>
+            <TextInput
+              value={editCmDisplayName}
+              onChangeText={setEditCmDisplayName}
+              style={styles.settingsFieldInput}
+              placeholder="例如：创业板指关注"
+              placeholderTextColor="#94a3b8"
+              editable={!editCmSaving}
+            />
+            <Text style={styles.settingsSubLabel}>匹配用词（任一命中即可）</Text>
+            <Text style={styles.muted}>可用空格、英文/中文逗号、分号分隔。</Text>
+            <TextInput
+              value={editCmKeywordsText}
+              onChangeText={setEditCmKeywordsText}
+              multiline
+              style={[styles.settingsFieldInput, styles.customModuleWizardKeywordInput]}
+              placeholder="多个词用空格、逗号或分号分隔"
+              placeholderTextColor="#94a3b8"
+              autoCorrect={false}
+              editable={!editCmSaving}
+            />
+            <Text style={styles.muted}>
+              当前拆分为：{splitRecognitionKeywords(editCmKeywordsText).join(" · ") || "（无）"}
+            </Text>
+          </ScrollView>
+          <View style={styles.customModuleConfigFooter}>
+            <Pressable
+              style={styles.ocrRuleModalDeleteButton}
+              onPress={confirmDeleteCustomModule}
+              disabled={editCmSaving}
+            >
+              <Text style={styles.ocrRuleModalDeleteText}>删除此模块</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.ocrRuleModalPrimaryButton, editCmSaving ? styles.customModuleConfigSaveDisabled : null]}
+              onPress={() => void saveCustomModuleConfig()}
+              disabled={editCmSaving}
+            >
+              <Text style={styles.ocrRuleModalPrimaryText}>{editCmSaving ? "保存中…" : "保存修改"}</Text>
+            </Pressable>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
       <ScrollView contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
         <View style={styles.heroCard}>
           <View style={styles.heroTopRow}>
-            <Text style={styles.heroHint}>今日已确认总资产(元)</Text>
+            <Text style={styles.heroHint}>目前为止总资产(元)</Text>
             <View style={styles.heroActions}>
               <Pressable style={styles.manageButton} onPress={() => setManageVisible(true)}>
                 <Text style={styles.manageButtonText}>导入</Text>
@@ -1546,18 +1746,30 @@ export default function App() {
           </View>
           <Text style={styles.heroTotal}>{formatDisplayAmount(dailySummary.total)}</Text>
           {dbInitError ? <Text style={styles.heroError}>数据库异常：{dbInitError}</Text> : null}
-          <View style={styles.quickStatRow}>
-            <View style={styles.quickStatItem}>
-              <Text style={styles.quickStatLabel}>余额宝/现金</Text>
-              <Text style={styles.quickStatValue}>{cashAmount.toFixed(2)}</Text>
+          <View style={styles.quickStatsColumn}>
+            <View style={styles.quickStatRow}>
+              <View style={styles.quickStatItem}>
+                <Text style={styles.quickStatLabel}>余额宝/现金</Text>
+                <Text style={styles.quickStatValue}>{cashAmount.toFixed(2)}</Text>
+              </View>
+              <View style={styles.quickStatItem}>
+                <Text style={styles.quickStatLabel}>基金</Text>
+                <Text style={styles.quickStatValue}>{fundAmount.toFixed(2)}</Text>
+              </View>
+              <View style={styles.quickStatItem}>
+                <Text style={styles.quickStatLabel}>保险</Text>
+                <Text style={styles.quickStatValue}>{insuranceAmount.toFixed(2)}</Text>
+              </View>
             </View>
-            <View style={styles.quickStatItem}>
-              <Text style={styles.quickStatLabel}>基金</Text>
-              <Text style={styles.quickStatValue}>{fundAmount.toFixed(2)}</Text>
-            </View>
-            <View style={styles.quickStatItem}>
-              <Text style={styles.quickStatLabel}>保险</Text>
-              <Text style={styles.quickStatValue}>{insuranceAmount.toFixed(2)}</Text>
+            <View style={styles.quickStatRow}>
+              <View style={styles.quickStatItem}>
+                <Text style={styles.quickStatLabel}>股票</Text>
+                <Text style={styles.quickStatValue}>{stockAmount.toFixed(2)}</Text>
+              </View>
+              <View style={styles.quickStatItem}>
+                <Text style={styles.quickStatLabel}>理财</Text>
+                <Text style={styles.quickStatValue}>{wealthManagementAmount.toFixed(2)}</Text>
+              </View>
             </View>
           </View>
         </View>
@@ -1699,17 +1911,28 @@ export default function App() {
               )}
             </View>
             <Text style={styles.settingsSubLabel}>自定义识别模块</Text>
+            <Text style={styles.muted}>点击名称区域进入配置（可改名称、用词或删除）；× 为隐藏折线图，+ 为恢复展示。</Text>
             <View style={styles.tagArea}>
               {visibleCustomRecognitionModules.length ? (
                 visibleCustomRecognitionModules.map((m) => (
-                  <Pressable
-                    key={`vis-cm-${m.id}`}
-                    style={styles.visibleTag}
-                    onPress={() => void moveCustomModuleToHidden(m.id)}
-                  >
-                    <Text style={styles.visibleTagText}>{m.displayName}</Text>
-                    <Text style={styles.visibleTagAction}>×</Text>
-                  </Pressable>
+                  <View key={`vis-cm-${m.id}`} style={styles.customModuleVisiblePill}>
+                    <Pressable
+                      style={styles.customModuleVisiblePillBody}
+                      onPress={() => openCustomModuleConfig(m)}
+                    >
+                      <Text style={[styles.visibleTagText, styles.customModulePillLabel]} numberOfLines={1}>
+                        {m.displayName}
+                      </Text>
+                    </Pressable>
+                    <View style={styles.customModulePillDivider} />
+                    <Pressable
+                      style={styles.customModuleVisiblePillAction}
+                      onPress={() => void moveCustomModuleToHidden(m.id)}
+                      hitSlop={8}
+                    >
+                      <Text style={styles.visibleTagAction}>×</Text>
+                    </Pressable>
+                  </View>
                 ))
               ) : (
                 <Text style={styles.muted}>暂无已展示的自定义模块。</Text>
@@ -1719,14 +1942,21 @@ export default function App() {
             <View style={styles.tagArea}>
               {hiddenCustomRecognitionModules.length ? (
                 hiddenCustomRecognitionModules.map((m) => (
-                  <Pressable
-                    key={`hid-cm-${m.id}`}
-                    style={styles.hiddenTag}
-                    onPress={() => void moveCustomModuleToVisible(m.id)}
-                  >
-                    <Text style={styles.hiddenTagAction}>+</Text>
-                    <Text style={styles.hiddenTagText}>{m.displayName}</Text>
-                  </Pressable>
+                  <View key={`hid-cm-${m.id}`} style={styles.customModuleHiddenPill}>
+                    <Pressable
+                      style={styles.customModuleHiddenPillAction}
+                      onPress={() => void moveCustomModuleToVisible(m.id)}
+                      hitSlop={8}
+                    >
+                      <Text style={styles.hiddenTagAction}>+</Text>
+                    </Pressable>
+                    <View style={styles.customModulePillDividerLight} />
+                    <Pressable style={styles.customModuleHiddenPillBody} onPress={() => openCustomModuleConfig(m)}>
+                      <Text style={[styles.hiddenTagText, styles.customModulePillLabel]} numberOfLines={1}>
+                        {m.displayName}
+                      </Text>
+                    </Pressable>
+                  </View>
                 ))
               ) : (
                 <Text style={styles.muted}>没有隐藏的自定义模块。</Text>
@@ -1737,7 +1967,7 @@ export default function App() {
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <Text style={styles.settingsLabel}>新增识别模块</Text>
             <Text style={styles.muted}>
-              通过一张截图配置关键词与展示名称。之后每次导入并确认保存时，若当日 OCR 同时包含全部关键词，该次导入的资产总额会计入对应折线图（与内置平台并列）。
+              通过一张截图配置关键词与展示名称。之后每次导入并确认保存时，若当日合并 OCR 命中任一关键词，该次导入的资产总额会计入对应折线图（与内置平台并列）。
             </Text>
             {customModuleNotice ? <Text style={styles.muted}>{customModuleNotice}</Text> : null}
             <Pressable style={styles.securityActionButton} onPress={openCustomModuleWizard}>
@@ -1817,6 +2047,65 @@ export default function App() {
               <Text style={styles.securityActionButtonText}>添加规则</Text>
             </Pressable>
           </View>
+          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+            <Text style={styles.settingsLabel}>数据清理</Text>
+            <Text style={styles.muted}>
+              仅删除「已确认导入」的快照；自定义识别模块与自定义 OCR 规则不会被删除。操作不可恢复，请谨慎使用。
+            </Text>
+            <View style={styles.clearActionRowModal}>
+              <Pressable
+                style={styles.clearActionButtonBlue}
+                onPress={() => {
+                  setClearMode("today");
+                  setClearAllStep2(false);
+                }}
+              >
+                <Text style={styles.clearActionText}>清空今日</Text>
+              </Pressable>
+              <Pressable
+                style={styles.clearActionButtonDanger}
+                onPress={() => {
+                  setClearMode("all");
+                  setClearAllStep2(false);
+                }}
+              >
+                <Text style={styles.clearActionText}>清空全部导入</Text>
+              </Pressable>
+            </View>
+          </View>
+          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+            <Text style={styles.settingsLabel}>内置模块测试数据</Text>
+            <Text style={styles.warn}>
+              写入测试数据会污染正常导入记录：模拟快照与真实数据合并，首页总资产与支付宝 / 招行 / 微信折线图都会受影响。请勿在日常记账时误触。
+            </Text>
+            <Text style={styles.muted}>
+              将写入约 20 个连续日期、三平台各一条递增金额的测试曲线（带测试标记）。清除时仅删除这些测试快照，不删真实导入。
+            </Text>
+            <View style={styles.settingsSeedActions}>
+              <Pressable
+                style={[
+                  styles.securityActionButton,
+                  (!dbReady || seedTestBusy) && styles.actionButtonDisabled
+                ]}
+                disabled={!dbReady || seedTestBusy}
+                onPress={promptWriteSeedTestData}
+              >
+                <Text style={styles.securityActionButtonText}>
+                  {seedTestBusy ? "处理中…" : "写入测试数据"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.settingsSeedClearButton,
+                  (!dbReady || seedTestBusy) && styles.actionButtonDisabled
+                ]}
+                disabled={!dbReady || seedTestBusy}
+                onPress={promptClearSeedTestData}
+              >
+                <Text style={styles.settingsSeedClearButtonText}>清除测试数据</Text>
+              </Pressable>
+            </View>
+          </View>
           </ScrollView>
         </SafeAreaView>
       ) : null}
@@ -1886,7 +2175,11 @@ export default function App() {
                     <Text style={styles.parseGroupTitle}>页面 {group.index + 1}</Text>
                     <Text style={styles.parseGroupTotal}>当前页面总额：{group.total.toFixed(2)}</Text>
                   </View>
-                  <Text style={styles.line}>页面类型：{SCREEN_TYPE_LABEL[group.meta?.parseResult.screenType ?? "unknown"]}</Text>
+                  <Text style={styles.line}>
+                    页面类型：
+                    {group.meta?.parseResult.screenDisplayLabel ??
+                      SCREEN_TYPE_LABEL[group.meta?.parseResult.screenType ?? "unknown"]}
+                  </Text>
                   <Pressable style={styles.addRowButton} onPress={() => addManualAssetRow(group.uri)}>
                     <Text style={styles.addRowButtonText}>+ 手动添加一行</Text>
                   </Pressable>
@@ -1998,49 +2291,6 @@ export default function App() {
                 <Text style={styles.confirmButtonText}>{saveLoading ? "记录中..." : "确认并记录"}</Text>
               </Pressable>
               {saveNotice ? <Text style={styles.muted}>{saveNotice}</Text> : null}
-            </View>
-
-            <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
-              <Text style={styles.cardTitle}>数据清理</Text>
-              <View style={styles.clearActionRowModal}>
-                <Pressable
-                  style={styles.clearActionButtonBlue}
-                  onPress={() => {
-                    setClearMode("today");
-                    setClearAllStep2(false);
-                  }}
-                >
-                  <Text style={styles.clearActionText}>清空今日</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.clearActionButtonDanger}
-                  onPress={() => {
-                    setClearMode("all");
-                    setClearAllStep2(false);
-                  }}
-                >
-                  <Text style={styles.clearActionText}>清空全部</Text>
-                </Pressable>
-              </View>
-              <Text style={styles.muted}>
-                内置模块（支付宝 / 招商银行 / 微信）测试折线：近 20 天、每日金额从 0 元递增 1 万，写入后会计入首页与对应平台趋势图。
-              </Text>
-              <View style={styles.clearActionRowModal}>
-                <Pressable
-                  style={[styles.clearActionButton, (!dbReady || seedTestBusy) && styles.actionButtonDisabled]}
-                  disabled={!dbReady || seedTestBusy}
-                  onPress={() => void handleSeedDefaultModuleTest()}
-                >
-                  <Text style={styles.clearActionText}>{seedTestBusy ? "处理中…" : "写入测试数据"}</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.clearActionButtonMuted, (!dbReady || seedTestBusy) && styles.actionButtonDisabled]}
-                  disabled={!dbReady || seedTestBusy}
-                  onPress={() => void handleClearSeedTest()}
-                >
-                  <Text style={styles.clearActionText}>清除测试数据</Text>
-                </Pressable>
-              </View>
             </View>
           </ScrollView>
         </SafeAreaView>
@@ -2171,6 +2421,9 @@ const styles = StyleSheet.create({
   heroError: {
     color: "#fecaca",
     fontSize: 12
+  },
+  quickStatsColumn: {
+    gap: 8
   },
   quickStatRow: {
     flexDirection: "row",
@@ -2933,6 +3186,81 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700"
   },
+  customModuleVisiblePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    maxWidth: "100%",
+    borderRadius: 999,
+    backgroundColor: "#2563eb",
+    overflow: "hidden"
+  },
+  customModulePillLabel: {
+    flexShrink: 1
+  },
+  customModuleVisiblePillBody: {
+    flexShrink: 1,
+    justifyContent: "center",
+    paddingVertical: 8,
+    paddingLeft: 12,
+    paddingRight: 6,
+    minWidth: 0
+  },
+  customModuleVisiblePillAction: {
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
+  customModuleHiddenPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    maxWidth: "100%",
+    borderRadius: 999,
+    backgroundColor: "#eef5ff",
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    overflow: "hidden"
+  },
+  customModuleHiddenPillAction: {
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
+  customModuleHiddenPillBody: {
+    flexShrink: 1,
+    justifyContent: "center",
+    paddingVertical: 8,
+    paddingRight: 12,
+    paddingLeft: 6,
+    minWidth: 0
+  },
+  customModulePillDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: "stretch",
+    minHeight: 24,
+    backgroundColor: "rgba(255,255,255,0.35)"
+  },
+  customModulePillDividerLight: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: "stretch",
+    minHeight: 24,
+    backgroundColor: "#bfdbfe"
+  },
+  customModuleConfigFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#bfdbfe",
+    backgroundColor: "white"
+  },
+  customModuleConfigSaveDisabled: {
+    opacity: 0.55
+  },
   opacityRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2970,6 +3298,22 @@ const styles = StyleSheet.create({
   },
   securityActionButtonText: {
     color: "white",
+    fontWeight: "700"
+  },
+  settingsSeedActions: {
+    gap: 10,
+    marginTop: 8
+  },
+  settingsSeedClearButton: {
+    borderRadius: 8,
+    backgroundColor: "#f1f5f9",
+    paddingVertical: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#cbd5e1"
+  },
+  settingsSeedClearButtonText: {
+    color: "#334155",
     fontWeight: "700"
   },
   customModuleWizardSafe: {
