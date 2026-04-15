@@ -37,15 +37,16 @@ import {
   type DailySummary,
   ensureDevClientSeedTestDataOnce,
   initAssetHistoryDb,
-  queryCustomRecognitionTrendSeries,
-  queryPlatformTrendSeries,
   queryCombinedLatestSummary,
+  queryCustomRecognitionTrendSeriesFull,
+  queryPlatformTrendSeriesFull,
   queryStoredMainTrendAndHeroSummary,
   type PlatformTrendFilter,
   saveImportSnapshot,
   seedDefaultModuleTestData,
   type TrendFilter,
-  type TrendPoint
+  type TrendPoint,
+  type TrendSeriesBreakdown
 } from "./src/storage/assetHistoryDb";
 import { loadCustomRecognitionModules, saveCustomRecognitionModules } from "./src/storage/customRecognitionModulesStore";
 import { loadOcrCustomRules, normalizeOcrRuleScreenScope, saveOcrCustomRules } from "./src/storage/ocrCustomRulesStore";
@@ -122,7 +123,7 @@ const MODULE_HINT_TEXT = {
   seedTestData:
     "写入测试数据会污染正常导入记录：模拟快照与真实数据合并，首页「目前为止总资产」与支付宝 / 招行 / 微信折线图都会受影响，请勿在日常记账时误触。\n\n将写入约 20 个连续日期、三平台各一条递增金额的测试曲线（带测试标记）。「清除测试数据」只删这些测试快照；「清空全部导入」会清空全部快照。",
   trendChart:
-    "每张折线图卡片右侧可独立切换「全部」或按资产分类，互不影响。主图为合并口径趋势，下方为单平台或自定义模块曲线；点按图表可查看单日金额。",
+    "每张折线图卡片右侧可独立切换「全部」或按资产分类，互不影响。选「全部」时除主合计折线外，会叠加有数据的资产分项折线（赤橙黄绿青）。主图为合并口径，下方为单平台或自定义模块；点按图表可查看单日各线金额。",
   screenshotImport:
     "最多可添加 6 张截图；点击缩略图可全屏预览，角标 × 可删除单张。识别完成后可在下方「解析结果」中修改金额与分类。\n\n识别后系统会按模板与规则自动分类，你可在确认保存前直接修正。",
   parseResult:
@@ -217,10 +218,18 @@ export default function App() {
   /** 当前展开「折线类型」下拉的卡片 key，null 表示全关 */
   const [trendMenuFor, setTrendMenuFor] = useState<string | null>(null);
   const [trendPoints, setTrendPoints] = useState<TrendPoint[]>([]);
+  const [mainTrendBreakdown, setMainTrendBreakdown] = useState<TrendSeriesBreakdown[] | undefined>(undefined);
   const [platformTrendPoints, setPlatformTrendPoints] = useState<Record<PlatformTrendFilter, TrendPoint[]>>({
     alipay: [],
     cmb: [],
     wechat: []
+  });
+  const [platformTrendBreakdown, setPlatformTrendBreakdown] = useState<
+    Record<PlatformTrendFilter, TrendSeriesBreakdown[] | undefined>
+  >({
+    alipay: undefined,
+    cmb: undefined,
+    wechat: undefined
   });
   const [visiblePlatformModules, setVisiblePlatformModules] = useState<PlatformTrendFilter[]>(PLATFORM_TREND_ORDER);
   const [cardOpacityPercent, setCardOpacityPercent] = useState(86);
@@ -239,6 +248,9 @@ export default function App() {
   const [customRecognitionModules, setCustomRecognitionModules] = useState<CustomRecognitionModule[]>([]);
   const [hiddenCustomModuleIds, setHiddenCustomModuleIds] = useState<string[]>([]);
   const [customModuleTrendPoints, setCustomModuleTrendPoints] = useState<Record<string, TrendPoint[]>>({});
+  const [customModuleTrendBreakdown, setCustomModuleTrendBreakdown] = useState<
+    Record<string, TrendSeriesBreakdown[] | undefined>
+  >({});
   const [customModuleWizardVisible, setCustomModuleWizardVisible] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
   const [wizardUri, setWizardUri] = useState<string | null>(null);
@@ -490,29 +502,45 @@ export default function App() {
   async function refreshTrendData() {
     const tf = trendFiltersByModule;
     const mainF = tf["trend-main"] ?? "all";
-    const [{ mainTrend, heroSummary }, alipayPoints, cmbPoints, wechatPoints, customPts] = await Promise.all([
+    const [
+      { mainTrend, heroSummary, mainBreakdown },
+      alipayBundle,
+      cmbBundle,
+      wechatBundle,
+      customBundles
+    ] = await Promise.all([
       queryStoredMainTrendAndHeroSummary(mainF, customRecognitionModules),
-      queryPlatformTrendSeries("alipay", tf["platform-alipay"] ?? "all"),
-      queryPlatformTrendSeries("cmb", tf["platform-cmb"] ?? "all"),
-      queryPlatformTrendSeries("wechat", tf["platform-wechat"] ?? "all"),
+      queryPlatformTrendSeriesFull("alipay", tf["platform-alipay"] ?? "all"),
+      queryPlatformTrendSeriesFull("cmb", tf["platform-cmb"] ?? "all"),
+      queryPlatformTrendSeriesFull("wechat", tf["platform-wechat"] ?? "all"),
       loadCustomRecognitionModules().then(async ({ modules }) => {
         const pts: Record<string, TrendPoint[]> = {};
+        const br: Record<string, TrendSeriesBreakdown[] | undefined> = {};
         await Promise.all(
           modules.map(async (m) => {
-            pts[m.id] = await queryCustomRecognitionTrendSeries(m.keywords, tf[`cm-${m.id}`] ?? "all");
+            const r = await queryCustomRecognitionTrendSeriesFull(m.keywords, tf[`cm-${m.id}`] ?? "all");
+            pts[m.id] = r.primary;
+            br[m.id] = r.breakdown?.length ? r.breakdown : undefined;
           })
         );
-        return pts;
+        return { pts, br };
       })
     ]);
     setTrendPoints(mainTrend);
+    setMainTrendBreakdown(mainBreakdown?.length ? mainBreakdown : undefined);
     setDailySummary(heroSummary);
     setPlatformTrendPoints({
-      alipay: alipayPoints,
-      cmb: cmbPoints,
-      wechat: wechatPoints
+      alipay: alipayBundle.primary,
+      cmb: cmbBundle.primary,
+      wechat: wechatBundle.primary
     });
-    setCustomModuleTrendPoints(customPts);
+    setPlatformTrendBreakdown({
+      alipay: alipayBundle.breakdown,
+      cmb: cmbBundle.breakdown,
+      wechat: wechatBundle.breakdown
+    });
+    setCustomModuleTrendPoints(customBundles.pts);
+    setCustomModuleTrendBreakdown(customBundles.br);
   }
 
   function updateAssetName(localId: string, name: string) {
@@ -1927,7 +1955,12 @@ export default function App() {
             </View>
             {renderTrendTypePicker("trend-main")}
           </View>
-          <TrendLineChart points={trendPoints} chartTooltipOpacity={moduleControlOpacity} />
+          <TrendLineChart
+            points={trendPoints}
+            breakdownByClass={mainTrendBreakdown}
+            primarySeriesLabel="全部"
+            chartTooltipOpacity={moduleControlOpacity}
+          />
         </View>
 
         {visiblePlatformModules.map((platform) => (
@@ -1948,7 +1981,12 @@ export default function App() {
               </View>
               {renderTrendTypePicker(`platform-${platform}`)}
             </View>
-            <TrendLineChart points={platformTrendPoints[platform]} chartTooltipOpacity={moduleControlOpacity} />
+            <TrendLineChart
+              points={platformTrendPoints[platform]}
+              breakdownByClass={platformTrendBreakdown[platform]}
+              primarySeriesLabel="全部"
+              chartTooltipOpacity={moduleControlOpacity}
+            />
           </View>
         ))}
         {visibleCustomRecognitionModules.map((m) => (
@@ -1969,7 +2007,12 @@ export default function App() {
               </View>
               {renderTrendTypePicker(`cm-${m.id}`)}
             </View>
-            <TrendLineChart points={customModuleTrendPoints[m.id] ?? []} chartTooltipOpacity={moduleControlOpacity} />
+            <TrendLineChart
+              points={customModuleTrendPoints[m.id] ?? []}
+              breakdownByClass={customModuleTrendBreakdown[m.id]}
+              primarySeriesLabel="全部"
+              chartTooltipOpacity={moduleControlOpacity}
+            />
           </View>
         ))}
       </ScrollView>

@@ -1,13 +1,37 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Line, Path, Rect } from "react-native-svg";
-import type { TrendPoint } from "../storage/assetHistoryDb";
+import type { AssetClass } from "../domain/types";
+import type { TrendPoint, TrendSeriesBreakdown } from "../storage/assetHistoryDb";
+
+/** 分项折线：赤、橙、黄、绿、青（与资产类固定对应）；紫色未使用 */
+const BREAKDOWN_LINE_COLORS: Record<AssetClass, string> = {
+  cash: "#dc2626",
+  fund: "#ea580c",
+  insurance: "#ca8a04",
+  stock: "#16a34a",
+  wealth_management: "#06b6d4"
+};
+
+const BREAKDOWN_CLASS_LABEL: Record<AssetClass, string> = {
+  cash: "现金",
+  fund: "基金",
+  insurance: "保险",
+  stock: "股票",
+  wealth_management: "理财"
+};
 
 type Props = {
   points: TrendPoint[];
+  /** 选「全部」时叠加的各资产类折线 */
+  breakdownByClass?: TrendSeriesBreakdown[];
+  /** 主折线在浮层中的名称，默认「全部」 */
+  primarySeriesLabel?: string;
   /** 与设置页卡片透明度联动，浮窗不透明度（建议传 moduleControlOpacity，约 0.5～1） */
   chartTooltipOpacity?: number;
 };
+
+type BreakdownPathLayer = { key: string; d: string; color: string; assetClass: AssetClass };
 
 const DISPLAY_POINT_CAP = 10;
 /** 拖动时折线路径向两侧多取的点数，减轻贴边时的截断感 */
@@ -186,7 +210,12 @@ const TOOLTIP_LAYOUT_HALF_W = 42;
 /** 气泡 + 三角总高度，使三角尖端落在数据点附近 */
 const TOOLTIP_LAYOUT_ABOVE_DOT = 42;
 
-export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
+export function TrendLineChart({
+  points,
+  chartTooltipOpacity = 1,
+  breakdownByClass,
+  primarySeriesLabel = "全部"
+}: Props) {
   const [width, setWidth] = useState(320);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const height = 180;
@@ -360,7 +389,8 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
         frozenScrollInitT: null as number | null,
         hideXLabels: false,
         yTickLayouts: [] as Array<{ key: string; top: number; label: string }>,
-        yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>
+        yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>,
+        breakdownPaths: [] as BreakdownPathLayer[]
       };
     }
 
@@ -387,13 +417,22 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
         frozenScrollInitT: null as number | null,
         hideXLabels: false,
         yTickLayouts: [] as Array<{ key: string; top: number; label: string }>,
-        yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>
+        yBandRects: [] as Array<{ key: string; x: number; y: number; width: number; height: number; fill: string }>,
+        breakdownPaths: [] as BreakdownPathLayer[]
       };
     }
 
-    const axisValues = axisPoints.map((p) => p.total);
-    const dataMin = Math.min(...axisValues);
-    const dataMax = Math.max(...axisValues);
+    const axisDatesForScale = axisPoints.map((p) => p.date);
+    const axisValuesForScale = [...axisPoints.map((p) => p.total)];
+    if (breakdownByClass?.length) {
+      for (const ser of breakdownByClass) {
+        for (const d of axisDatesForScale) {
+          axisValuesForScale.push(ser.points.find((p) => p.date === d)?.total ?? 0);
+        }
+      }
+    }
+    const dataMin = Math.min(...axisValuesForScale);
+    const dataMax = Math.max(...axisValuesForScale);
     const { ticks, domainMin, domainMax } = buildNiceYTicks(dataMin, dataMax, 5);
     const spread = Math.max(domainMax - domainMin, 1e-9);
 
@@ -412,6 +451,7 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
     let bufferScrollW = plotW;
     let frozenScrollInitT: number | null = null;
     let hideXLabels = false;
+    let breakdownPaths: BreakdownPathLayer[] = [];
 
     if (frozen) {
       const freezeW = axisFreezeStart!;
@@ -432,6 +472,19 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
       dots = bufPathDots.slice(j0, j0 + DISPLAY_POINT_CAP);
       frozenScrollInitT = -(M <= 1 ? 0 : j0 * plotStep);
       hideXLabels = true;
+      breakdownPaths = (breakdownByClass ?? []).map((ser, si) => {
+        const pts = bufPathDots.map((base) => {
+          const total = ser.points.find((p) => p.date === base.date)?.total ?? 0;
+          const y = ((domainMax - total) * plotInnerH) / spread;
+          return { x: base.x, y };
+        });
+        return {
+          key: `bd-${ser.assetClass}-fz-${si}`,
+          d: buildPathExtended(pts, 0, bufferScrollW),
+          color: BREAKDOWN_LINE_COLORS[ser.assetClass],
+          assetClass: ser.assetClass
+        };
+      });
     } else {
       const linePoints = points.slice(lineStartClamped, lineStartClamped + DISPLAY_POINT_CAP);
       dots = linePoints.map((item, index) => {
@@ -441,6 +494,21 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
         return { x, y, total: item.total, date: item.date };
       });
       path = buildPathExtended(dots, 0, plotW);
+      breakdownPaths = (breakdownByClass ?? []).map((ser, si) => {
+        const pts = linePoints.map((item, index) => {
+          const total = ser.points.find((p) => p.date === item.date)?.total ?? 0;
+          const x =
+            linePoints.length === 1 ? plotW / 2 : LINE_X_INSET + (index * lineUsableW) / denom;
+          const y = ((domainMax - total) * plotInnerH) / spread;
+          return { x, y };
+        });
+        return {
+          key: `bd-${ser.assetClass}-st-${si}`,
+          d: buildPathExtended(pts, 0, plotW),
+          color: BREAKDOWN_LINE_COLORS[ser.assetClass],
+          assetClass: ser.assetClass
+        };
+      });
     }
 
     const yBandRects = buildYBandRects(ticks, domainMin, domainMax, 0, plotW, 0, plotInnerH);
@@ -454,7 +522,10 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
       };
     });
 
-    const dotsSignature = dots.map((d) => `${d.date}:${d.total}`).join("|");
+    const breakdownSig = (breakdownByClass ?? [])
+      .map((s) => `${s.assetClass}:${s.points.map((p) => `${p.date}:${p.total}`).join(",")}`)
+      .join("|");
+    const dotsSignature = `${dots.map((d) => `${d.date}:${d.total}`).join("|")}#${breakdownSig}`;
 
     return {
       path,
@@ -472,9 +543,10 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
       frozenScrollInitT,
       hideXLabels,
       yTickLayouts,
-      yBandRects
+      yBandRects,
+      breakdownPaths
     };
-  }, [points, axisFreezeStart, windowStart, height, paddingY, rightPad, width]);
+  }, [points, breakdownByClass, axisFreezeStart, windowStart, height, paddingY, rightPad, width]);
 
   /** 可见折线点集变化时，默认高亮并展示最右侧点（当前窗内最近一次导入） */
   useLayoutEffect(() => {
@@ -597,6 +669,18 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
             ]}
           >
             <Svg width={computed.bufferScrollW} height={computed.plotInnerH} pointerEvents="none">
+              {computed.breakdownPaths.map((layer) => (
+                <Path
+                  key={layer.key}
+                  d={layer.d}
+                  stroke={layer.color}
+                  strokeWidth={1.5}
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity={0.92}
+                />
+              ))}
               <Path d={computed.path} stroke="#2563eb" strokeWidth={2} fill="none" />
               {computed.dots.map((dot, index) => (
                 <Circle
@@ -646,7 +730,33 @@ export function TrendLineChart({ points, chartTooltipOpacity = 1 }: Props) {
               >
                 <View style={styles.tooltipBubble}>
                   <Text style={styles.tooltipDate}>{activeDot.date}</Text>
-                  <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
+                  {breakdownByClass?.length ? (
+                    <>
+                      <Text style={styles.tooltipAmountPrimary}>
+                        {primarySeriesLabel} {activeDot.total.toFixed(2)} 元
+                      </Text>
+                      {(breakdownByClass ?? [])
+                        .map((ser) => {
+                          const pt = ser.points.find((p) => p.date === activeDot.date);
+                          const v = pt?.total ?? 0;
+                          return { ser, v };
+                        })
+                        .filter(({ v }) => v > 0)
+                        .map(({ ser, v }) => (
+                          <Text
+                            key={ser.assetClass}
+                            style={[
+                              styles.tooltipBreakdownLine,
+                              { color: BREAKDOWN_LINE_COLORS[ser.assetClass] }
+                            ]}
+                          >
+                            {BREAKDOWN_CLASS_LABEL[ser.assetClass]} {v.toFixed(2)} 元
+                          </Text>
+                        ))}
+                    </>
+                  ) : (
+                    <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
+                  )}
                 </View>
                 <View style={styles.tooltipCaret} />
               </View>
@@ -836,7 +946,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(37,99,235,0.22)",
     paddingHorizontal: 7,
     paddingVertical: 4,
-    minWidth: 78,
+    minWidth: 96,
     alignItems: "center",
     shadowColor: "#1e3a5f",
     shadowOffset: { width: 0, height: 1 },
@@ -868,6 +978,18 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 11,
     lineHeight: 14
+  },
+  tooltipAmountPrimary: {
+    color: "#1d4ed8",
+    fontWeight: "700",
+    fontSize: 11,
+    lineHeight: 14
+  },
+  tooltipBreakdownLine: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "600",
+    marginTop: 1
   },
   emptyWrap: {
     borderWidth: 1,

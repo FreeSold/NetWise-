@@ -9,6 +9,20 @@ export type TrendPoint = {
   total: number;
 };
 
+/** 折线「全部」模式下按资产类的分项序列 */
+export type TrendSeriesBreakdown = {
+  assetClass: AssetClass;
+  points: TrendPoint[];
+};
+
+const ASSET_CLASSES_FOR_BREAKDOWN: AssetClass[] = [
+  "cash",
+  "fund",
+  "insurance",
+  "stock",
+  "wealth_management"
+];
+
 export type PlatformTrendFilter = "cmb" | "alipay" | "wechat";
 
 type SaveResult = {
@@ -138,6 +152,27 @@ function buildMainTrendSeriesFromSnapshots(
   });
 }
 
+/** 主趋势「全部」时：与各时点日期对齐的各资产类分项（用于多折线） */
+function buildMainTrendBreakdownSeries(
+  snapshots: SnapshotRecord[],
+  customModules: { id: string; keywords: string[] }[]
+): TrendSeriesBreakdown[] {
+  const withAssets = snapshots.filter((s) => s.assets.length);
+  const uniqueDates = [...new Set(withAssets.map((s) => s.importDate))].sort((a, b) => a.localeCompare(b));
+  const series: TrendSeriesBreakdown[] = [];
+  for (const c of ASSET_CLASSES_FOR_BREAKDOWN) {
+    const points = uniqueDates.map((date) => {
+      const pool = snapshots.filter((s) => s.importDate <= date && s.assets.length);
+      const { total } = combinedSummaryFromSnapshotList(pool, customModules, c);
+      return { date, total };
+    });
+    if (points.some((p) => p.total > 0)) {
+      series.push({ assetClass: c, points });
+    }
+  }
+  return series;
+}
+
 /**
  * 主资金趋势：每个日期点为「截至该日（含）」按首页同款规则合并后的总资产（或指定资产类别合计）。
  * 数据与顶部「目前为止总资产」同源（持久化快照列表），由存储计算，并非先画线再反推合计。
@@ -157,61 +192,141 @@ export async function queryTrendSeries(
 export async function queryStoredMainTrendAndHeroSummary(
   mainTrendFilter: TrendFilter,
   customModules: { id: string; keywords: string[] }[]
-): Promise<{ mainTrend: TrendPoint[]; heroSummary: DailySummary }> {
+): Promise<{
+  mainTrend: TrendPoint[];
+  heroSummary: DailySummary;
+  mainBreakdown?: TrendSeriesBreakdown[];
+}> {
   const store = await readStore();
   const mainTrend = buildMainTrendSeriesFromSnapshots(store.snapshots, mainTrendFilter, customModules);
   const { total, byClass } = combinedSummaryFromSnapshotList(store.snapshots, customModules, "all");
+  const mainBreakdown =
+    mainTrendFilter === "all" && mainTrend.length
+      ? buildMainTrendBreakdownSeries(store.snapshots, customModules)
+      : undefined;
   return {
     mainTrend,
-    heroSummary: { date: "combined-latest", total, byClass }
+    heroSummary: { date: "combined-latest", total, byClass },
+    ...(mainBreakdown?.length ? { mainBreakdown } : {})
   };
+}
+
+/** 平台趋势 + 选「全部」时按资产类的分项（与主图多线口径一致：同日多快照按类相加） */
+export async function queryPlatformTrendSeriesFull(
+  platform: PlatformTrendFilter,
+  filter: TrendFilter = "all"
+): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
+  const snapshots = await readAllSnapshots();
+  if (filter !== "all") {
+    const totalsByDate = new Map<string, number>();
+    for (const snapshot of snapshots) {
+      const platformAssets = snapshot.assets.filter((asset) => {
+        if (!belongsToPlatform(asset.source, platform)) {
+          return false;
+        }
+        if (asset.assetClass !== filter) {
+          return false;
+        }
+        return true;
+      });
+      if (!platformAssets.length) {
+        continue;
+      }
+      const snapshotTotal = platformAssets.reduce(
+        (sum, asset) => sum + (Number.isFinite(asset.amount) ? asset.amount : 0),
+        0
+      );
+      totalsByDate.set(snapshot.date, roundMoney((totalsByDate.get(snapshot.date) ?? 0) + snapshotTotal));
+    }
+    const primary = [...totalsByDate.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([date, total]) => ({ date, total: roundMoney(total) }));
+    return { primary };
+  }
+
+  const byDateClass = new Map<string, Record<AssetClass, number>>();
+  for (const snapshot of snapshots) {
+    const platformAssets = snapshot.assets.filter((asset) => belongsToPlatform(asset.source, platform));
+    if (!platformAssets.length) {
+      continue;
+    }
+    const date = snapshot.date;
+    let row = byDateClass.get(date);
+    if (!row) {
+      row = emptyByClassTotals();
+      byDateClass.set(date, row);
+    }
+    for (const asset of platformAssets) {
+      const add = Number.isFinite(asset.amount) ? asset.amount : 0;
+      row[asset.assetClass] = roundMoney(row[asset.assetClass] + add);
+    }
+  }
+  const sortedDates = [...byDateClass.keys()].sort((a, b) => a.localeCompare(b));
+  const primary = sortedDates.map((date) => {
+    const row = byDateClass.get(date)!;
+    const total = roundMoney(ASSET_CLASSES_FOR_BREAKDOWN.reduce((s, c) => s + row[c], 0));
+    return { date, total };
+  });
+  const breakdown: TrendSeriesBreakdown[] = [];
+  for (const c of ASSET_CLASSES_FOR_BREAKDOWN) {
+    const points = sortedDates.map((date) => ({
+      date,
+      total: roundMoney(byDateClass.get(date)![c])
+    }));
+    if (points.some((p) => p.total > 0)) {
+      breakdown.push({ assetClass: c, points });
+    }
+  }
+  return { primary, breakdown: breakdown.length ? breakdown : undefined };
 }
 
 export async function queryPlatformTrendSeries(
   platform: PlatformTrendFilter,
   filter: TrendFilter = "all"
 ): Promise<TrendPoint[]> {
-  const snapshots = await readAllSnapshots();
-  const totalsByDate = new Map<string, number>();
-
-  for (const snapshot of snapshots) {
-    const platformAssets = snapshot.assets.filter((asset) => {
-      if (!belongsToPlatform(asset.source, platform)) {
-        return false;
-      }
-      if (filter !== "all" && asset.assetClass !== filter) {
-        return false;
-      }
-      return true;
-    });
-    if (!platformAssets.length) {
-      continue;
-    }
-    const snapshotTotal = platformAssets.reduce(
-      (sum, asset) => sum + (Number.isFinite(asset.amount) ? asset.amount : 0),
-      0
-    );
-    totalsByDate.set(snapshot.date, roundMoney((totalsByDate.get(snapshot.date) ?? 0) + snapshotTotal));
-  }
-
-  return [...totalsByDate.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([date, total]) => ({ date, total: roundMoney(total) }));
+  return (await queryPlatformTrendSeriesFull(platform, filter)).primary;
 }
 
 /** 自定义识别模块趋势：OCR 命中模块关键词时计入；若同图还被内置模板解析出资产，只累加自定义规则产出的 `source===custom` 部分，避免误判内置页时模块整条为空。 */
-export async function queryCustomRecognitionTrendSeries(
+export async function queryCustomRecognitionTrendSeriesFull(
   keywords: string[],
   filter: TrendFilter = "all"
-): Promise<TrendPoint[]> {
+): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
   const compactKws = keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
   if (!compactKws.length) {
-    return [];
+    return { primary: [] };
   }
 
   const store = await readStore();
-  const totalsByDate = new Map<string, number>();
 
+  if (filter !== "all") {
+    const totalsByDate = new Map<string, number>();
+    for (const snapshot of store.snapshots) {
+      if (!snapshot.assets.length) {
+        continue;
+      }
+      if (!snapshotOcrMatchesCustomModuleKeywords(snapshot, compactKws)) {
+        continue;
+      }
+      if (snapshotHasBuiltInTemplateAssets(snapshot) && !snapshot.assets.some((a) => a.source === "custom")) {
+        continue;
+      }
+      const byPart = sumAssetsForCustomModuleContribution(snapshot);
+      const snapshotTotal = roundMoney(byPart[filter]);
+      if (snapshotTotal > 0) {
+        totalsByDate.set(
+          snapshot.importDate,
+          roundMoney((totalsByDate.get(snapshot.importDate) ?? 0) + snapshotTotal)
+        );
+      }
+    }
+    const primary = [...totalsByDate.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([date, total]) => ({ date, total: roundMoney(total) }));
+    return { primary };
+  }
+
+  const byDateClass = new Map<string, Record<AssetClass, number>>();
   for (const snapshot of store.snapshots) {
     if (!snapshot.assets.length) {
       continue;
@@ -223,21 +338,40 @@ export async function queryCustomRecognitionTrendSeries(
       continue;
     }
     const byPart = sumAssetsForCustomModuleContribution(snapshot);
-    const snapshotTotal =
-      filter === "all"
-        ? roundMoney(Object.values(byPart).reduce((sum, value) => sum + value, 0))
-        : roundMoney(byPart[filter]);
-    if (snapshotTotal > 0) {
-      totalsByDate.set(
-        snapshot.importDate,
-        roundMoney((totalsByDate.get(snapshot.importDate) ?? 0) + snapshotTotal)
-      );
+    const date = snapshot.importDate;
+    let row = byDateClass.get(date);
+    if (!row) {
+      row = emptyByClassTotals();
+      byDateClass.set(date, row);
+    }
+    for (const c of ASSET_CLASSES_FOR_BREAKDOWN) {
+      row[c] = roundMoney(row[c] + byPart[c]);
     }
   }
+  const sortedDates = [...byDateClass.keys()].sort((a, b) => a.localeCompare(b));
+  const primary = sortedDates.map((date) => {
+    const row = byDateClass.get(date)!;
+    const total = roundMoney(ASSET_CLASSES_FOR_BREAKDOWN.reduce((s, c) => s + row[c], 0));
+    return { date, total };
+  });
+  const breakdown: TrendSeriesBreakdown[] = [];
+  for (const c of ASSET_CLASSES_FOR_BREAKDOWN) {
+    const points = sortedDates.map((date) => ({
+      date,
+      total: roundMoney(byDateClass.get(date)![c])
+    }));
+    if (points.some((p) => p.total > 0)) {
+      breakdown.push({ assetClass: c, points });
+    }
+  }
+  return { primary, breakdown: breakdown.length ? breakdown : undefined };
+}
 
-  return [...totalsByDate.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([date, total]) => ({ date, total: roundMoney(total) }));
+export async function queryCustomRecognitionTrendSeries(
+  keywords: string[],
+  filter: TrendFilter = "all"
+): Promise<TrendPoint[]> {
+  return (await queryCustomRecognitionTrendSeriesFull(keywords, filter)).primary;
 }
 
 /** 仅汇总「指定自然日」内确认保存的快照（历史行为，首页已不再使用）。 */
