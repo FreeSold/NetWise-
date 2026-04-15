@@ -122,7 +122,7 @@ const MODULE_HINT_TEXT = {
   seedTestData:
     "写入测试数据会污染正常导入记录：模拟快照与真实数据合并，首页「目前为止总资产」与支付宝 / 招行 / 微信折线图都会受影响，请勿在日常记账时误触。\n\n将写入约 20 个连续日期、三平台各一条递增金额的测试曲线（带测试标记）。「清除测试数据」只删这些测试快照；「清空全部导入」会清空全部快照。",
   trendChart:
-    "每张折线图卡片右侧均可切换「全部」或按资产分类；各卡片共用同一筛选，改一处即全部更新。主图为合并口径趋势，下方为单平台或自定义模块曲线；点按图表可查看单日金额。",
+    "每张折线图卡片右侧可独立切换「全部」或按资产分类，互不影响。主图为合并口径趋势，下方为单平台或自定义模块曲线；点按图表可查看单日金额。",
   screenshotImport:
     "最多可添加 6 张截图；点击缩略图可全屏预览，角标 × 可删除单张。识别完成后可在下方「解析结果」中修改金额与分类。\n\n识别后系统会按模板与规则自动分类，你可在确认保存前直接修正。",
   parseResult:
@@ -212,7 +212,8 @@ export default function App() {
     total: 0,
     byClass: { cash: 0, fund: 0, insurance: 0, stock: 0, wealth_management: 0 }
   });
-  const [trendFilter, setTrendFilter] = useState<TrendFilter>("all");
+  /** 各折线卡片独立的展示类型，key：trend-main / platform-alipay / platform-cmb / platform-wechat / cm-模块id */
+  const [trendFiltersByModule, setTrendFiltersByModule] = useState<Record<string, TrendFilter>>({});
   /** 当前展开「折线类型」下拉的卡片 key，null 表示全关 */
   const [trendMenuFor, setTrendMenuFor] = useState<string | null>(null);
   const [trendPoints, setTrendPoints] = useState<TrendPoint[]>([]);
@@ -283,15 +284,25 @@ export default function App() {
     );
   }
 
+  /** 打开折线类型菜单时抬高整张卡片，避免被下方卡片的下拉控件盖住 */
+  function trendCardMenuLiftStyle(menuKey: string) {
+    return trendMenuFor === menuKey ? styles.trendCardMenuLift : null;
+  }
+
+  function trendFilterForMenuKey(menuKey: string): TrendFilter {
+    return trendFiltersByModule[menuKey] ?? "all";
+  }
+
   function renderTrendTypePicker(menuKey: string) {
     const menuOpen = trendMenuFor === menuKey;
+    const selected = trendFilterForMenuKey(menuKey);
     return (
       <View style={styles.trendPickerArea}>
         <Pressable
           style={[styles.trendPickerWrap, modulePressOpacityStyle()]}
           onPress={() => setTrendMenuFor((prev) => (prev === menuKey ? null : menuKey))}
         >
-          <Text style={styles.trendPickerLabel}>{TREND_FILTER_LABEL[trendFilter]}</Text>
+          <Text style={styles.trendPickerLabel}>{TREND_FILTER_LABEL[selected]}</Text>
           <Text style={styles.trendPickerArrow}>▼</Text>
         </Pressable>
         {menuOpen ? (
@@ -299,16 +310,22 @@ export default function App() {
             {TREND_FILTER_ORDER.map((f) => (
               <Pressable
                 key={f}
-                style={[styles.trendDropdownItem, f === trendFilter ? styles.trendDropdownItemActive : null]}
+                style={[styles.trendDropdownItem, f === selected ? styles.trendDropdownItemActive : null]}
                 onPress={() => {
-                  setTrendFilter(f);
+                  setTrendFiltersByModule((prev) => {
+                    const cur = prev[menuKey] ?? "all";
+                    if (cur === f) {
+                      return prev;
+                    }
+                    return { ...prev, [menuKey]: f };
+                  });
                   setTrendMenuFor(null);
                 }}
               >
                 <Text
                   style={[
                     styles.trendDropdownItemText,
-                    f === trendFilter ? styles.trendDropdownItemTextActive : null
+                    f === selected ? styles.trendDropdownItemTextActive : null
                   ]}
                 >
                   {TREND_FILTER_LABEL[f]}
@@ -363,13 +380,13 @@ export default function App() {
         return;
       }
       try {
-        await refreshTrendData(trendFilter);
+        await refreshTrendData();
       } catch (error) {
         console.error("TREND_LOAD_FAILED", error);
       }
     }
     void loadTrend();
-  }, [dbReady, trendFilter, customRecognitionModules]);
+  }, [dbReady, trendFiltersByModule, customRecognitionModules]);
 
   useEffect(() => {
     if (!appUnlocked) {
@@ -408,8 +425,8 @@ export default function App() {
     if (!dbReady || !appUnlocked) {
       return;
     }
-    void refreshTrendData(trendFilter);
-  }, [dbReady, appUnlocked, trendFilter, customRecognitionModules]);
+    void refreshTrendData();
+  }, [dbReady, appUnlocked, trendFiltersByModule, customRecognitionModules]);
 
   useEffect(() => {
     if (!dbReady || !appUnlocked) {
@@ -419,13 +436,13 @@ export default function App() {
       try {
         const seeded = await ensureDevClientSeedTestDataOnce();
         if (seeded) {
-          await refreshTrendData(trendFilter);
+          await refreshTrendData();
         }
       } catch (error) {
         console.warn("DEV_CLIENT_SEED_TEST_DATA_FAILED", error);
       }
     })();
-  }, [dbReady, appUnlocked, trendFilter, customRecognitionModules]);
+  }, [dbReady, appUnlocked, trendFiltersByModule, customRecognitionModules]);
 
   async function computeImageHash(uri: string): Promise<string> {
     const base64Payload = await FileSystem.readAsStringAsync(uri, {
@@ -470,17 +487,19 @@ export default function App() {
     setExpandedOcrUris((prev) => (prev.includes(uri) ? prev.filter((item) => item !== uri) : [...prev, uri]));
   }
 
-  async function refreshTrendData(filter: TrendFilter) {
+  async function refreshTrendData() {
+    const tf = trendFiltersByModule;
+    const mainF = tf["trend-main"] ?? "all";
     const [{ mainTrend, heroSummary }, alipayPoints, cmbPoints, wechatPoints, customPts] = await Promise.all([
-      queryStoredMainTrendAndHeroSummary(filter, customRecognitionModules),
-      queryPlatformTrendSeries("alipay", filter),
-      queryPlatformTrendSeries("cmb", filter),
-      queryPlatformTrendSeries("wechat", filter),
+      queryStoredMainTrendAndHeroSummary(mainF, customRecognitionModules),
+      queryPlatformTrendSeries("alipay", tf["platform-alipay"] ?? "all"),
+      queryPlatformTrendSeries("cmb", tf["platform-cmb"] ?? "all"),
+      queryPlatformTrendSeries("wechat", tf["platform-wechat"] ?? "all"),
       loadCustomRecognitionModules().then(async ({ modules }) => {
         const pts: Record<string, TrendPoint[]> = {};
         await Promise.all(
           modules.map(async (m) => {
-            pts[m.id] = await queryCustomRecognitionTrendSeries(m.keywords, filter);
+            pts[m.id] = await queryCustomRecognitionTrendSeries(m.keywords, tf[`cm-${m.id}`] ?? "all");
           })
         );
         return pts;
@@ -794,7 +813,7 @@ export default function App() {
       await saveCustomRecognitionModules({ modules: nextModules, hiddenIds: loaded.hiddenIds });
       setCustomRecognitionModules(nextModules);
       setHiddenCustomModuleIds(loaded.hiddenIds);
-      await refreshTrendData(trendFilter);
+      await refreshTrendData();
       setCustomModuleNotice("已保存模块修改。");
       setTimeout(() => setCustomModuleNotice(null), 2000);
       closeCustomModuleConfig();
@@ -831,7 +850,7 @@ export default function App() {
       await saveCustomRecognitionModules({ modules: nextModules, hiddenIds: nextHidden });
       setCustomRecognitionModules(nextModules);
       setHiddenCustomModuleIds(nextHidden);
-      await refreshTrendData(trendFilter);
+      await refreshTrendData();
       setCustomModuleNotice("已删除该模块。");
       setTimeout(() => setCustomModuleNotice(null), 2000);
       closeCustomModuleConfig();
@@ -979,7 +998,7 @@ export default function App() {
       await saveCustomRecognitionModules({ modules: nextModules, hiddenIds: loaded.hiddenIds });
       setCustomRecognitionModules(nextModules);
       setHiddenCustomModuleIds(loaded.hiddenIds);
-      await refreshTrendData(trendFilter);
+      await refreshTrendData();
       closeCustomModuleWizard();
       setCustomModuleNotice("已添加识别模块。");
       setTimeout(() => setCustomModuleNotice(null), 2000);
@@ -1199,7 +1218,7 @@ export default function App() {
       const ocrTextsForSave = currentImageHashes.map((h) => hashToOcr.get(h) ?? "");
       const result = await saveImportSnapshot(currentImageHashes, toSave, ocrTextsForSave);
       setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
-      await refreshTrendData(trendFilter);
+      await refreshTrendData();
       resetWorkingImport();
       setManageVisible(false);
     } catch (error) {
@@ -1223,7 +1242,7 @@ export default function App() {
       await clearAllImportHistory();
       setSaveNotice("已清空全部导入记录（自定义模块与 OCR 规则未改动）。");
     }
-    await refreshTrendData(trendFilter);
+    await refreshTrendData();
     resetWorkingImport();
     setClearMode(null);
     setClearAllStep2(false);
@@ -1250,7 +1269,7 @@ export default function App() {
     setSeedTestBusy(true);
     try {
       await seedDefaultModuleTestData();
-      await refreshTrendData(trendFilter);
+      await refreshTrendData();
       Alert.alert(
         "已写入",
         "已生成支付宝 / 招行 / 微信各约 20 个时点的测试曲线。若不再需要，请到本页清除测试数据。"
@@ -1280,7 +1299,7 @@ export default function App() {
     setSeedTestBusy(true);
     try {
       const removed = await clearSeedTestData();
-      await refreshTrendData(trendFilter);
+      await refreshTrendData();
       Alert.alert("完成", removed > 0 ? `已清除 ${removed} 条测试快照。` : "当前没有测试快照。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知错误";
@@ -1889,7 +1908,14 @@ export default function App() {
           </View>
         </View>
 
-        <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
+        <View
+          collapsable={false}
+          style={[
+            styles.card,
+            { backgroundColor: cardBackgroundColor },
+            trendCardMenuLiftStyle("trend-main")
+          ]}
+        >
           <View style={styles.trendHeaderRow}>
             <View style={styles.trendHeaderTitleCluster}>
               <View style={styles.cardTitleHintRow}>
@@ -1905,7 +1931,15 @@ export default function App() {
         </View>
 
         {visiblePlatformModules.map((platform) => (
-          <View key={platform} style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
+          <View
+            key={platform}
+            collapsable={false}
+            style={[
+              styles.card,
+              { backgroundColor: cardBackgroundColor },
+              trendCardMenuLiftStyle(`platform-${platform}`)
+            ]}
+          >
             <View style={styles.trendHeaderRow}>
               <View style={styles.trendHeaderTitleCluster}>
                 <Text style={styles.cardTitle} numberOfLines={1}>
@@ -1918,7 +1952,15 @@ export default function App() {
           </View>
         ))}
         {visibleCustomRecognitionModules.map((m) => (
-          <View key={m.id} style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
+          <View
+            key={m.id}
+            collapsable={false}
+            style={[
+              styles.card,
+              { backgroundColor: cardBackgroundColor },
+              trendCardMenuLiftStyle(`cm-${m.id}`)
+            ]}
+          >
             <View style={styles.trendHeaderRow}>
               <View style={styles.trendHeaderTitleCluster}>
                 <Text style={styles.cardTitle} numberOfLines={1}>
@@ -2481,7 +2523,8 @@ const styles = StyleSheet.create({
   },
   content: {
     gap: 12,
-    padding: 16
+    padding: 16,
+    overflow: "visible"
   },
   heroCard: {
     backgroundColor: "#0b63c8",
@@ -3083,9 +3126,14 @@ const styles = StyleSheet.create({
     height: 34,
     paddingHorizontal: 12
   },
+  /** 菜单打开时整张趋势卡抬升，避免下方卡片的 Pressable/下拉盖住当前菜单 */
+  trendCardMenuLift: {
+    zIndex: 2000,
+    elevation: 24
+  },
   trendPickerArea: {
     position: "relative",
-    zIndex: 5
+    zIndex: 10
   },
   trendPickerLabel: {
     color: "#1d4ed8",
@@ -3107,6 +3155,7 @@ const styles = StyleSheet.create({
     top: 38,
     right: 0,
     width: 110,
+    zIndex: 20,
     borderWidth: 1,
     borderColor: "#bfdbfe",
     borderRadius: 14,
