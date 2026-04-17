@@ -163,35 +163,127 @@ export function resolveSnapshotBucketIdFromParseResult(pr: ParseResult): string 
   return "unknown";
 }
 
+type MainTrendIncrementalLatestState = {
+  latestPlatform: Record<PlatformTrendFilter, SnapshotRecord | null>;
+  latestCustomById: Map<string, SnapshotRecord | null>;
+};
+
+type CustomModuleKeywordMeta = { id: string; compactKws: string[] };
+
+function emptyMainTrendIncrementalState(customModuleIds: string[]): MainTrendIncrementalLatestState {
+  return {
+    latestPlatform: { alipay: null, cmb: null, wechat: null },
+    latestCustomById: new Map(customModuleIds.map((id) => [id, null]))
+  };
+}
+
+function applySnapshotToMainTrendIncrementalState(
+  state: MainTrendIncrementalLatestState,
+  s: SnapshotRecord,
+  modMeta: CustomModuleKeywordMeta[]
+): void {
+  const platforms: PlatformTrendFilter[] = ["alipay", "cmb", "wechat"];
+  for (const p of platforms) {
+    if (collectPlatformAssetsFromSnapshot(s, p).length) {
+      state.latestPlatform[p] = pickNewerSnapshotCandidate(state.latestPlatform[p], s);
+    }
+  }
+  for (const mod of modMeta) {
+    if (!snapshotQualifiesAsCustomModuleLatestCandidate(s, mod.id, mod.compactKws)) {
+      continue;
+    }
+    const cur = state.latestCustomById.get(mod.id) ?? null;
+    state.latestCustomById.set(mod.id, pickNewerSnapshotCandidate(cur, s));
+  }
+}
+
+function byClassFromMainTrendIncrementalState(
+  state: MainTrendIncrementalLatestState,
+  customModules: { id: string; keywords: string[] }[]
+): Record<AssetClass, number> {
+  const byClass = emptyByClassTotals();
+  const platforms: PlatformTrendFilter[] = ["alipay", "cmb", "wechat"];
+  for (const p of platforms) {
+    const snap = state.latestPlatform[p];
+    if (!snap) {
+      continue;
+    }
+    mergeByClassTotals(byClass, sumAssetsByClass(collectPlatformAssetsFromSnapshot(snap, p)));
+  }
+  for (const mod of customModules) {
+    const snap = state.latestCustomById.get(mod.id) ?? null;
+    if (!snap) {
+      continue;
+    }
+    mergeByClassTotals(byClass, sumAssetsForCustomModuleContribution(snap, mod));
+  }
+  return byClass;
+}
+
+/**
+ * 主趋势：在每个「有资产数据的导入日」上，合并规则同 `combinedSummaryFromSnapshotList`（各平台 / 各自定义模块取截至该日的最近一条相关快照）。
+ * 单次扫描 O(N + D)，避免对每个图表日再全量过滤快照。
+ */
+function computeMainTrendCumulativeByClassSeries(
+  snapshots: SnapshotRecord[],
+  customModules: { id: string; keywords: string[] }[]
+): { uniqueDates: string[]; byClassAtDate: Record<AssetClass, number>[] } {
+  const withAssets = snapshots.filter((s) => s.assets.length);
+  const uniqueDates = [...new Set(withAssets.map((s) => s.importDate))].sort((a, b) => a.localeCompare(b));
+  if (!uniqueDates.length) {
+    return { uniqueDates: [], byClassAtDate: [] };
+  }
+  const sorted = [...withAssets].sort((a, b) => {
+    const cmp = a.importDate.localeCompare(b.importDate);
+    if (cmp !== 0) {
+      return cmp;
+    }
+    return a.id - b.id;
+  });
+  const modMeta: CustomModuleKeywordMeta[] = customModules.map((m) => ({
+    id: m.id,
+    compactKws: m.keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean)
+  }));
+  const state = emptyMainTrendIncrementalState(customModules.map((m) => m.id));
+  const byClassAtDate: Record<AssetClass, number>[] = [];
+  let si = 0;
+  for (const date of uniqueDates) {
+    while (si < sorted.length && sorted[si].importDate <= date) {
+      applySnapshotToMainTrendIncrementalState(state, sorted[si], modMeta);
+      si += 1;
+    }
+    byClassAtDate.push(byClassFromMainTrendIncrementalState(state, customModules));
+  }
+  return { uniqueDates, byClassAtDate };
+}
+
 function buildMainTrendSeriesFromSnapshots(
   snapshots: SnapshotRecord[],
   filter: TrendFilter,
   customModules: { id: string; keywords: string[] }[]
 ): TrendPoint[] {
-  const withAssets = snapshots.filter((s) => s.assets.length);
-  const uniqueDates = [...new Set(withAssets.map((s) => s.importDate))].sort((a, b) => a.localeCompare(b));
-
-  return uniqueDates.map((date) => {
-    const pool = snapshots.filter((s) => s.importDate <= date && s.assets.length);
-    const { total } = combinedSummaryFromSnapshotList(pool, customModules, filter);
+  const { uniqueDates, byClassAtDate } = computeMainTrendCumulativeByClassSeries(snapshots, customModules);
+  return uniqueDates.map((date, i) => {
+    const byClass = byClassAtDate[i];
+    const total =
+      filter === "all"
+        ? roundMoney(Object.values(byClass).reduce((sum, value) => sum + value, 0))
+        : roundMoney(byClass[filter]);
     return { date, total };
   });
 }
 
-/** 主趋势「全部」时：与各时点日期对齐的各资产类分项（用于多折线） */
-function buildMainTrendBreakdownSeries(
-  snapshots: SnapshotRecord[],
-  customModules: { id: string; keywords: string[] }[]
+/** 主趋势「全部」时：与各时点日期对齐的各资产类分项（用于多折线），与主序列同源 */
+function buildMainTrendBreakdownSeriesFromCumulative(
+  uniqueDates: string[],
+  byClassAtDate: Record<AssetClass, number>[]
 ): TrendSeriesBreakdown[] {
-  const withAssets = snapshots.filter((s) => s.assets.length);
-  const uniqueDates = [...new Set(withAssets.map((s) => s.importDate))].sort((a, b) => a.localeCompare(b));
   const series: TrendSeriesBreakdown[] = [];
   for (const c of ASSET_CLASSES_FOR_BREAKDOWN) {
-    const points = uniqueDates.map((date) => {
-      const pool = snapshots.filter((s) => s.importDate <= date && s.assets.length);
-      const { total } = combinedSummaryFromSnapshotList(pool, customModules, c);
-      return { date, total };
-    });
+    const points = uniqueDates.map((date, idx) => ({
+      date,
+      total: roundMoney(byClassAtDate[idx][c])
+    }));
     if (points.some((p) => p.total > 0)) {
       series.push({ assetClass: c, points });
     }
@@ -209,11 +301,22 @@ function queryStoredMainTrendAndHeroSummaryFromSnapshots(
   heroSummary: DailySummary;
   mainBreakdown?: TrendSeriesBreakdown[];
 } {
-  const mainTrend = buildMainTrendSeriesFromSnapshots(snapshots, mainTrendFilter, customModules);
+  const { uniqueDates, byClassAtDate } = computeMainTrendCumulativeByClassSeries(snapshots, customModules);
+  const mainTrend =
+    uniqueDates.length === 0
+      ? []
+      : uniqueDates.map((date, i) => {
+          const byClass = byClassAtDate[i];
+          const total =
+            mainTrendFilter === "all"
+              ? roundMoney(Object.values(byClass).reduce((sum, value) => sum + value, 0))
+              : roundMoney(byClass[mainTrendFilter]);
+          return { date, total };
+        });
   const { total, byClass } = combinedSummaryFromSnapshotList(snapshots, customModules, "all");
   const mainBreakdown =
     mainTrendFilter === "all" && mainTrend.length
-      ? buildMainTrendBreakdownSeries(snapshots, customModules)
+      ? buildMainTrendBreakdownSeriesFromCumulative(uniqueDates, byClassAtDate)
       : undefined;
   return {
     mainTrend,
@@ -492,6 +595,14 @@ function isSnapshotNewerThan(a: SnapshotRecord, b: SnapshotRecord): boolean {
   return b.id > a.id;
 }
 
+/** 在「按 importDate、id 递增」扫描快照时，用当前候选与已有最优比较并保留较新者 */
+function pickNewerSnapshotCandidate(current: SnapshotRecord | null, candidate: SnapshotRecord): SnapshotRecord {
+  if (!current) {
+    return candidate;
+  }
+  return isSnapshotNewerThan(current, candidate) ? candidate : current;
+}
+
 function pickLatestSnapshot(snapshots: SnapshotRecord[]): SnapshotRecord | null {
   if (!snapshots.length) {
     return null;
@@ -522,29 +633,36 @@ function findLatestPlatformSnapshotInList(snapshots: SnapshotRecord[], platform:
   return pickLatestSnapshot(candidates);
 }
 
+/** 与 `findLatestCustomModuleSnapshotInList` 的候选条件一致，供增量扫描复用 */
+function snapshotQualifiesAsCustomModuleLatestCandidate(
+  snap: SnapshotRecord,
+  moduleId: string,
+  compactKws: string[]
+): boolean {
+  if (snap.assetBuckets?.length) {
+    return snap.assetBuckets.some((b) => b.bucketId === moduleId && b.assets.length > 0);
+  }
+  if (!snap.assets.length) {
+    return false;
+  }
+  if (!compactKws.length) {
+    return false;
+  }
+  if (!snapshotOcrMatchesCustomModuleKeywords(snap, compactKws)) {
+    return false;
+  }
+  if (snapshotHasBuiltInTemplateAssets(snap)) {
+    return snap.assets.some((a) => a.source === "custom");
+  }
+  return true;
+}
+
 function findLatestCustomModuleSnapshotInList(
   snapshots: SnapshotRecord[],
   mod: { id: string; keywords: string[] }
 ): SnapshotRecord | null {
   const compactKws = mod.keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
-  const candidates = snapshots.filter((snap) => {
-    if (snap.assetBuckets?.length) {
-      return snap.assetBuckets.some((b) => b.bucketId === mod.id && b.assets.length > 0);
-    }
-    if (!snap.assets.length) {
-      return false;
-    }
-    if (!compactKws.length) {
-      return false;
-    }
-    if (!snapshotOcrMatchesCustomModuleKeywords(snap, compactKws)) {
-      return false;
-    }
-    if (snapshotHasBuiltInTemplateAssets(snap)) {
-      return snap.assets.some((a) => a.source === "custom");
-    }
-    return true;
-  });
+  const candidates = snapshots.filter((snap) => snapshotQualifiesAsCustomModuleLatestCandidate(snap, mod.id, compactKws));
   return pickLatestSnapshot(candidates);
 }
 

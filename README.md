@@ -128,13 +128,13 @@ npm run start:clean
 - 快照文件内为 **加密后的资产数据**，不是明文堆在磁盘上可读的 JSON
 - 原始截图 **不会** 写入上述快照文件，只在本次导入流程里暂时保留
 - 用户点击“确认并记录”后，会立即清掉当前导入图片的预览和内存引用
-- 当前开发阶段仍保留 OCR 全量日志，便于调试；正式发布前建议关闭
+- OCR 全量原文仅在 **开发构建**（`__DEV__` 为真，如 Metro）时写入控制台；**Release APK 不会打印**，避免系统日志泄露金融原文
 
 ## 趋势图
 
 - 页面展示 **总资金趋势** 及 **支付宝 / 招商银行 / 微信** 分平台趋势；支持 **自定义识别模块** 折线（在设置中配置）
 - 主图与各平台卡片可独立切换「全部」或按资产类：现金 / 基金 / 保险 / 股票 / 理财
-- 实现见 `src/components/TrendLineChart.tsx` 与 `assetHistoryDb.ts` 中的查询函数
+- 实现见 `src/components/TrendLineChart.tsx`（子模块在 `src/components/trendLineChart/`）与 `assetHistoryDb.ts` 中的查询函数
 - **已优化**：首页刷新各折线与汇总时，改为单次解密快照文件后批量计算（`queryTrendDashboardBundle`），详见根目录《代码优化计划》**§2.1【已优化】**
 
 如果模拟器里“相册选图”不稳定，可改用按钮：
@@ -172,7 +172,7 @@ adb push "D:\your-image-path\asset.png" /sdcard/Pictures/
 建议做法：
 1. 在 App 里导入测试截图
 2. 在 App 的“解析结果”区域展开“`查看 OCR 原文`”
-3. 如需更细日志，再查看启动终端里的 OCR 原文日志
+3. 如需更细日志，在开发构建下可查看启动终端里的 OCR 原文日志（Release 无此项）
 4. 在 `parseOcrText` 内打 `console.log` 观察：
    - 识别到的 `screenType`
    - 每条规则是否命中
@@ -253,7 +253,7 @@ eas build -p android --profile production
 - `src/storage/assetHistoryDb.ts`：加密快照读写、去重、趋势序列查询
 - `src/security/appSecurity.ts`：口令哈希、加密密钥、生物识别开关
 - `src/ocr/ocrSpace.ts`：本地 OCR 封装
-- `src/components/TrendLineChart.tsx`：趋势图
+- `src/components/TrendLineChart.tsx` + `src/components/trendLineChart/*`：趋势图（样式、几何、布局计算、手势已拆分）
 - `src/storage/ocrCustomRulesStore.ts`、`src/storage/customRecognitionModulesStore.ts`：规则与模块的 JSON 读写
 
 更完整的操作说明与需求归纳见项目根目录：`操作文档.md`、`需求分析文档.md`。
@@ -263,4 +263,4 @@ eas build -p android --profile production
 1. 扩充内置银行/证券类页面模板与回归用截图集
 2. 数据备份 / 导出 / 恢复（加密包或用户可控迁移）
 3. 若需复杂查询或体量增大，再评估 **SQLite 迁移**（与现有加密 JSON 方案做迁移脚本）
-4. 发布前收敛 OCR 调试日志与测试入口开关
+4. 发布前复核测试入口开关（OCR 全量控制台日志已对 Release 关闭）

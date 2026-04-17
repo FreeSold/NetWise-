@@ -13,7 +13,6 @@ import {
   ASSET_CLASS_LABEL,
   ASSET_CLASS_ORDER,
   EMPTY_PARSE_RESULT,
-  MODULE_HINT_TEXT,
   OCR_RULE_SCOPE_LABEL,
   OCR_RULE_SCOPE_ORDER,
   PLATFORM_MODULE_LABEL,
@@ -23,6 +22,7 @@ import {
   TREND_FILTER_LABEL,
   TREND_FILTER_ORDER
 } from "./src/app/homeUiConstants";
+import { MODULE_HINT_TEXT, alerts, common, errors, fmt, labels, notices, placeholders } from "./src/copy";
 import {
   buildImportSnapshotPayload,
   inferMimeFromUri,
@@ -190,7 +190,7 @@ export default function App() {
         onPress={() => setModuleHintPopover({ title, body })}
         hitSlop={10}
         accessibilityRole="button"
-        accessibilityLabel={`${title}说明`}
+        accessibilityLabel={fmt.moduleInfoAccessibilityLabel(title)}
       >
         <Text style={styles.moduleInfoIconChar}>i</Text>
       </Pressable>
@@ -278,7 +278,7 @@ export default function App() {
 
   const pendingSaveDebugText = useMemo(() => {
     if (!editableAssets.length) {
-      return "（暂无解析行：导入并识别后，此处展示将写入库的 JSON 预览）";
+      return fmt.debugPendingSaveEmpty;
     }
     try {
       const { validationErrors, assetBuckets, ocrTextsForSave } = compileImportSnapshotPayload();
@@ -296,15 +296,13 @@ export default function App() {
           bucketTotals,
           grandTotalAllBuckets,
           ocrTextLengths: ocrTextsForSave.map((t) => t.length),
-          ocrTextPreview: ocrTextsForSave.map((t) =>
-            t.length > 400 ? `${t.slice(0, 400)}…(全文${t.length}字)` : t
-          )
+          ocrTextPreview: ocrTextsForSave.map((t) => fmt.ocrTextPreviewInJson(t))
         },
         null,
         2
       );
     } catch (e) {
-      return `预览生成失败：${e instanceof Error ? e.message : String(e)}`;
+      return fmt.debugPreviewFailed(e instanceof Error ? e.message : String(e));
     }
   }, [compileImportSnapshotPayload]);
 
@@ -364,7 +362,7 @@ export default function App() {
         ) as Record<string, string>
       };
     } catch (e) {
-      const msg = `序列化失败：${e instanceof Error ? e.message : String(e)}`;
+      const msg = fmt.debugSerializeFailed(e instanceof Error ? e.message : String(e));
       return {
         trendMain: msg,
         platformAlipay: msg,
@@ -409,7 +407,7 @@ export default function App() {
         setDbReady(true);
         setDbInitError(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "未知数据库错误";
+        const message = error instanceof Error ? error.message : errors.unknownDb;
         console.error("DB_INIT_FAILED", error);
         setDbInitError(message);
       }
@@ -441,7 +439,7 @@ export default function App() {
         setOcrCustomRules(rules);
         setCustomRuleNotice(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "规则加载失败";
+        const message = error instanceof Error ? error.message : errors.rulesLoadFailed;
         setCustomRuleNotice(message);
       }
     })();
@@ -458,7 +456,7 @@ export default function App() {
         setHiddenCustomModuleIds(hiddenIds);
         setCustomModuleNotice(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "自定义模块加载失败";
+        const message = error instanceof Error ? error.message : errors.customModulesLoadFailed;
         setCustomModuleNotice(message);
       }
     })();
@@ -570,7 +568,7 @@ export default function App() {
 
   async function refreshPersistedSnapshotsDebug() {
     if (!dbReady) {
-      setPersistedSnapshotsDebugText("数据库未就绪。");
+      setPersistedSnapshotsDebugText(notices.debugDbNotReady);
       return;
     }
     setPersistedSnapshotsDebugBusy(true);
@@ -698,9 +696,9 @@ export default function App() {
   }
 
   function confirmRemoveAssetRow(localId: string) {
-    Alert.alert("删除该行？", "将从当前解析列表移除，不影响已保存的历史。", [
-      { text: "取消", style: "cancel" },
-      { text: "删除", style: "destructive", onPress: () => removeEditableAsset(localId) }
+    Alert.alert(alerts.deleteRow.title, alerts.deleteRow.message, [
+      { text: common.cancel, style: "cancel" },
+      { text: common.delete, style: "destructive", onPress: () => removeEditableAsset(localId) }
     ]);
   }
 
@@ -736,7 +734,7 @@ export default function App() {
     const sourceSnippet = ruleDraftSource.trim();
     const recognizedContent = ruleDraftContent.trim();
     if (!sourceSnippet || !recognizedContent) {
-      setCustomRuleNotice("请填写原文与识别内容（金额名称）。");
+      setCustomRuleNotice(notices.customRuleFillSourceAndContent);
       setTimeout(() => setCustomRuleNotice(null), 2500);
       return;
     }
@@ -762,11 +760,11 @@ export default function App() {
     setOcrCustomRules(next);
     try {
       await saveOcrCustomRules(next);
-      setCustomRuleNotice("已保存规则。");
+      setCustomRuleNotice(notices.customRuleSaved);
       setTimeout(() => setCustomRuleNotice(null), 2000);
       closeOcrRuleModal();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "保存失败";
+      const message = error instanceof Error ? error.message : errors.saveFailed;
       setCustomRuleNotice(message);
     }
   }
@@ -777,7 +775,7 @@ export default function App() {
     try {
       await saveOcrCustomRules(next);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "删除后保存失败";
+      const message = error instanceof Error ? error.message : errors.saveAfterDeleteFailed;
       setCustomRuleNotice(message);
     }
   }
@@ -787,10 +785,10 @@ export default function App() {
     if (!id) {
       return;
     }
-    Alert.alert("删除此规则？", "将从本机规则列表移除。", [
-      { text: "取消", style: "cancel" },
+    Alert.alert(alerts.deleteRule.title, alerts.deleteRule.message, [
+      { text: common.cancel, style: "cancel" },
       {
-        text: "删除",
+        text: common.delete,
         style: "destructive",
         onPress: () =>
           void (async () => {
@@ -847,11 +845,11 @@ export default function App() {
     const name = editCmDisplayName.trim();
     const keywords = splitRecognitionKeywords(editCmKeywordsText);
     if (!name) {
-      setEditCmError("请填写模块展示名称。");
+      setEditCmError(notices.customModuleDisplayNameRequired);
       return;
     }
     if (!keywords.length) {
-      setEditCmError("请至少填写一个匹配用词（可用空格、逗号、分号分隔）。");
+      setEditCmError(notices.customModuleKeywordsRequired);
       return;
     }
     setEditCmSaving(true);
@@ -860,7 +858,7 @@ export default function App() {
       const loaded = await loadCustomRecognitionModules();
       const idx = loaded.modules.findIndex((x) => x.id === id);
       if (idx < 0) {
-        setEditCmError("模块已不存在，请关闭后重试。");
+        setEditCmError(notices.customModuleMissing);
         return;
       }
       const nextModules = [...loaded.modules];
@@ -869,11 +867,11 @@ export default function App() {
       setCustomRecognitionModules(nextModules);
       setHiddenCustomModuleIds(loaded.hiddenIds);
       await refreshTrendData();
-      setCustomModuleNotice("已保存模块修改。");
+      setCustomModuleNotice(notices.customModuleSaved);
       setTimeout(() => setCustomModuleNotice(null), 2000);
       closeCustomModuleConfig();
     } catch (error) {
-      setEditCmError(error instanceof Error ? error.message : "保存失败");
+      setEditCmError(error instanceof Error ? error.message : errors.saveFailed);
     } finally {
       setEditCmSaving(false);
     }
@@ -884,15 +882,11 @@ export default function App() {
     if (!id) {
       return;
     }
-    const name = editCmDisplayName.trim() || "该模块";
-    Alert.alert(
-      "删除自定义模块",
-      `确定删除「${name}」吗？绑定「仅该模块」的 OCR 规则将变成无效引用，请到规则列表中自行调整。`,
-      [
-        { text: "取消", style: "cancel" },
-        { text: "删除", style: "destructive", onPress: () => void executeDeleteCustomModule(id) }
-      ]
-    );
+    const name = editCmDisplayName.trim() || notices.defaultModuleName;
+    Alert.alert(alerts.deleteCustomModule.title, fmt.deleteCustomModuleBody(name), [
+      { text: common.cancel, style: "cancel" },
+      { text: common.delete, style: "destructive", onPress: () => void executeDeleteCustomModule(id) }
+    ]);
   }
 
   async function executeDeleteCustomModule(id: string) {
@@ -906,11 +900,11 @@ export default function App() {
       setCustomRecognitionModules(nextModules);
       setHiddenCustomModuleIds(nextHidden);
       await refreshTrendData();
-      setCustomModuleNotice("已删除该模块。");
+      setCustomModuleNotice(notices.customModuleDeleted);
       setTimeout(() => setCustomModuleNotice(null), 2000);
       closeCustomModuleConfig();
     } catch (error) {
-      setEditCmError(error instanceof Error ? error.message : "删除失败");
+      setEditCmError(error instanceof Error ? error.message : errors.deleteFailed);
     } finally {
       setEditCmSaving(false);
     }
@@ -941,7 +935,7 @@ export default function App() {
     setWizardError(null);
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      setWizardError("没有相册权限，请在系统设置中允许访问相册。");
+      setWizardError(notices.wizardNoAlbumPermission);
       return;
     }
     const picked = await ImagePicker.launchImageLibraryAsync({
@@ -973,7 +967,7 @@ export default function App() {
 
   async function wizardEnterStep2RunOcr() {
     if (!wizardUri) {
-      setWizardError("请先选择一张图片。");
+      setWizardError(notices.wizardPickImageFirst);
       return;
     }
     setWizardStep(2);
@@ -1001,7 +995,7 @@ export default function App() {
         return;
       }
       if (!wizardOcrText.trim()) {
-        setWizardError("请先完成 OCR 识别。");
+        setWizardError(notices.wizardOcrFirst);
         return;
       }
       setWizardError(null);
@@ -1011,7 +1005,7 @@ export default function App() {
     if (wizardStep === 3) {
       const k = splitRecognitionKeywords(wizardKeywordsText);
       if (!k.length) {
-        setWizardError("请填写关键词，可用空格、逗号、分号分隔多个词。");
+        setWizardError(notices.wizardKeywordsRequired);
         return;
       }
       setWizardError(null);
@@ -1020,7 +1014,7 @@ export default function App() {
     }
     if (wizardStep === 4) {
       if (!wizardModuleName.trim()) {
-        setWizardError("请填写模块展示名称。");
+        setWizardError(notices.wizardModuleNameRequired);
         return;
       }
       setWizardError(null);
@@ -1043,7 +1037,7 @@ export default function App() {
   async function submitCustomRecognitionModule() {
     const keywords = splitRecognitionKeywords(wizardKeywordsText);
     if (!keywords.length || !wizardModuleName.trim()) {
-      setWizardError("请完善模块名称与关键词。");
+      setWizardError(notices.wizardIncomplete);
       return;
     }
     const id = `cm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1055,10 +1049,10 @@ export default function App() {
       setHiddenCustomModuleIds(loaded.hiddenIds);
       await refreshTrendData();
       closeCustomModuleWizard();
-      setCustomModuleNotice("已添加识别模块。");
+      setCustomModuleNotice(notices.customModuleAdded);
       setTimeout(() => setCustomModuleNotice(null), 2000);
     } catch (error) {
-      setWizardError(error instanceof Error ? error.message : "保存失败");
+      setWizardError(error instanceof Error ? error.message : errors.saveFailed);
     }
   }
 
@@ -1079,18 +1073,18 @@ export default function App() {
   });
 
   function formatOcrError(error: unknown): string {
-    const rawMessage = error instanceof Error ? error.message : "OCR 识别失败";
+    const rawMessage = error instanceof Error ? error.message : errors.ocrGeneric;
     if (rawMessage.includes("doesn't seem to be linked")) {
-      return "本地 OCR 模块尚未编进当前 App，请重新安装调试包或重新打 APK。";
+      return errors.ocrNotInBuild;
     }
     if (rawMessage.includes("Network request failed")) {
-      return "OCR 服务连接失败，请检查当前网络，或稍后再试。";
+      return errors.ocrNetwork;
     }
     if (rawMessage.includes("OCR request failed")) {
-      return `OCR 服务请求失败：${rawMessage}`;
+      return fmt.ocrRequestFailed(rawMessage);
     }
     if (rawMessage.includes("empty text")) {
-      return "OCR 没有识别出文字，请换一张更清晰的截图再试。";
+      return errors.ocrEmptyText;
     }
     return rawMessage;
   }
@@ -1103,7 +1097,9 @@ export default function App() {
     try {
       const imageHash = await computeImageHash(imageUri);
       const text = await recognizeTextFromImage(imageUri);
-      console.log("[OCR_FULL_TEXT_BEGIN]\n" + text + "\n[OCR_FULL_TEXT_END]");
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[OCR_FULL_TEXT_BEGIN]\n" + text + "\n[OCR_FULL_TEXT_END]");
+      }
       const parsedResult = parseOcrText(text, ocrCustomRules, customRecognitionModules);
       const nextAssetItems = parsedResult.assets.map((asset, index) => ({
         ...asset,
@@ -1133,12 +1129,12 @@ export default function App() {
     setSourceModalVisible(false);
     const remainSlots = 6 - selectedImageUris.length;
     if (remainSlots <= 0) {
-      setOcrError("最多导入 6 张图片，请先清空后再导入。");
+      setOcrError(notices.ocrMaxImages);
       return;
     }
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      setOcrError("没有相册权限，请在系统设置中允许访问相册。");
+      setOcrError(notices.ocrNoAlbumPermission);
       return;
     }
 
@@ -1163,7 +1159,7 @@ export default function App() {
     setSourceModalVisible(false);
     const remainSlots = 6 - selectedImageUris.length;
     if (remainSlots <= 0) {
-      setOcrError("最多导入 6 张图片，请先清空后再导入。");
+      setOcrError(notices.ocrMaxImages);
       return;
     }
     const picked = await DocumentPicker.getDocumentAsync({
@@ -1216,19 +1212,19 @@ export default function App() {
       return;
     }
     if (!dbReady) {
-      setSaveNotice(dbInitError ? `数据库初始化失败：${dbInitError}` : "数据库初始化中，请稍后重试。");
+      setSaveNotice(dbInitError ? fmt.dbInitFailed(dbInitError) : notices.saveDbInitWait);
       return;
     }
     if (!currentImageHashes.length) {
-      setSaveNotice("请先导入并识别图片。");
+      setSaveNotice(notices.saveImportFirst);
       return;
     }
     if (!editableAssets.length) {
-      setSaveNotice("当前没有可保存的资产项。");
+      setSaveNotice(notices.saveNoAssets);
       return;
     }
     setSaveLoading(true);
-    setSaveNotice("正在记录数据...");
+    setSaveNotice(notices.saveInProgress);
     try {
       const { validationErrors, assetBuckets, ocrTextsForSave } = compileImportSnapshotPayload();
       setEditableAssets((prev) =>
@@ -1238,19 +1234,19 @@ export default function App() {
         }))
       );
       if (validationErrors.length) {
-        setSaveNotice(`记录失败：${validationErrors[0]}`);
+        setSaveNotice(fmt.saveFailedLine(validationErrors[0]));
         setSaveLoading(false);
         return;
       }
       const result = await saveImportSnapshot(currentImageHashes, assetBuckets, ocrTextsForSave);
-      setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
+      setSaveNotice(result.saved ? fmt.savedSnapshot(result.date) : notices.saveDuplicateToday);
       await refreshTrendData();
       resetWorkingImport();
       setManageVisible(false);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知保存错误";
+      const message = error instanceof Error ? error.message : errors.unknownSave;
       console.error("SAVE_IMPORT_FAILED", error);
-      setSaveNotice(`记录失败：${message}`);
+      setSaveNotice(fmt.saveFailedLine(message));
     } finally {
       setSaveLoading(false);
     }
@@ -1259,14 +1255,14 @@ export default function App() {
   async function handleClearData() {
     if (clearMode === "today") {
       await clearCurrentDateData();
-      setSaveNotice("已清空当前日期数据。");
+      setSaveNotice(notices.saveClearedToday);
     } else if (clearMode === "all") {
       if (!clearAllStep2) {
         setClearAllStep2(true);
         return;
       }
       await clearAllImportHistory();
-      setSaveNotice("已清空全部导入记录（自定义模块与 OCR 规则未改动）。");
+      setSaveNotice(notices.saveClearedAll);
     }
     await refreshTrendData();
     resetWorkingImport();
@@ -1278,14 +1274,10 @@ export default function App() {
     if (!dbReady || seedTestBusy) {
       return;
     }
-    Alert.alert(
-      "确认写入测试数据？",
-      "将在你的导入记录中插入约 20 天的模拟快照，与真实导入混在一起，首页「目前为止总资产」和三平台折线图都会受影响，容易造成误判。仅建议在明确调试时使用。\n\n可通过本页「清除测试数据」移除测试快照，或使用「清空全部导入」清空全部记录。",
-      [
-        { text: "取消", style: "cancel" },
-        { text: "仍要写入", style: "destructive", onPress: () => void executeWriteSeedTestData() }
-      ]
-    );
+    Alert.alert(alerts.seedWrite.title, alerts.seedWrite.message, [
+      { text: common.cancel, style: "cancel" },
+      { text: alerts.seedWrite.confirm, style: "destructive", onPress: () => void executeWriteSeedTestData() }
+    ]);
   }
 
   async function executeWriteSeedTestData() {
@@ -1296,13 +1288,10 @@ export default function App() {
     try {
       await seedDefaultModuleTestData();
       await refreshTrendData();
-      Alert.alert(
-        "已写入",
-        "已生成支付宝 / 招行 / 微信各约 20 个时点的测试曲线。若不再需要，请到本页清除测试数据。"
-      );
+      Alert.alert(alerts.seedWritten.title, alerts.seedWritten.message);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
-      Alert.alert("写入失败", message);
+      const message = error instanceof Error ? error.message : errors.unknown;
+      Alert.alert(alerts.seedWriteFailedTitle, message);
     } finally {
       setSeedTestBusy(false);
     }
@@ -1312,9 +1301,9 @@ export default function App() {
     if (!dbReady || seedTestBusy) {
       return;
     }
-    Alert.alert("清除测试数据？", "将删除所有带测试标记的快照，不会影响其它真实导入记录。", [
-      { text: "取消", style: "cancel" },
-      { text: "清除", onPress: () => void executeClearSeedTestData() }
+    Alert.alert(alerts.seedClear.title, alerts.seedClear.message, [
+      { text: common.cancel, style: "cancel" },
+      { text: alerts.seedClear.confirm, onPress: () => void executeClearSeedTestData() }
     ]);
   }
 
@@ -1326,10 +1315,10 @@ export default function App() {
     try {
       const removed = await clearSeedTestData();
       await refreshTrendData();
-      Alert.alert("完成", removed > 0 ? `已清除 ${removed} 条测试快照。` : "当前没有测试快照。");
+      Alert.alert(alerts.seedClearDoneTitle, fmt.seedCleared(removed));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
-      Alert.alert("清除失败", message);
+      const message = error instanceof Error ? error.message : errors.unknown;
+      Alert.alert(alerts.seedClearFailedTitle, message);
     } finally {
       setSeedTestBusy(false);
     }
@@ -1357,7 +1346,7 @@ export default function App() {
     setUnlockError(null);
     const trimmedPasscode = passcodeInput.trim();
     if (!/^\d{6}$/.test(trimmedPasscode)) {
-      setUnlockError("请输入 6 位数字口令。");
+      setUnlockError(notices.unlockPasscodeLength);
       return;
     }
 
@@ -1365,7 +1354,7 @@ export default function App() {
     try {
       if (!hasPasscodeConfigured) {
         if (trimmedPasscode !== passcodeConfirmInput.trim()) {
-          setUnlockError("两次输入的口令不一致。");
+          setUnlockError(notices.unlockPasscodeMismatch);
           return;
         }
         await saveAppPasscode(trimmedPasscode);
@@ -1382,7 +1371,7 @@ export default function App() {
 
       const verified = await verifyAppPasscode(trimmedPasscode);
       if (!verified) {
-        setUnlockError("口令不正确，请重试。");
+        setUnlockError(notices.unlockWrongPasscode);
         return;
       }
       setPasscodeInput("");
@@ -1456,7 +1445,7 @@ export default function App() {
               <Text style={styles.moduleHintPopoverBody}>{moduleHintPopover?.body}</Text>
             </ScrollView>
             <Pressable style={styles.moduleHintPopoverOk} onPress={() => setModuleHintPopover(null)}>
-              <Text style={styles.moduleHintPopoverOkText}>知道了</Text>
+              <Text style={styles.moduleHintPopoverOkText}>{common.ok}</Text>
             </Pressable>
           </View>
         </View>
@@ -1471,15 +1460,15 @@ export default function App() {
         <View style={styles.overlayMask}>
           <Pressable style={styles.overlayMaskTouch} onPress={() => setSourceModalVisible(false)} />
           <View style={styles.sourceSheet}>
-            <Text style={styles.sourceTitle}>选择图片来源</Text>
+            <Text style={styles.sourceTitle}>{labels.sourceSheetTitle}</Text>
             <Pressable style={styles.sheetButton} onPress={handlePickAndRecognize}>
-              <Text style={styles.sheetButtonText}>从相册选择</Text>
+              <Text style={styles.sheetButtonText}>{labels.pickFromAlbum}</Text>
             </Pressable>
             <Pressable style={styles.sheetButton} onPress={handlePickFromFiles}>
-              <Text style={styles.sheetButtonText}>从文件选择</Text>
+              <Text style={styles.sheetButtonText}>{labels.pickFromFiles}</Text>
             </Pressable>
             <Pressable style={styles.sheetCancelButton} onPress={() => setSourceModalVisible(false)}>
-              <Text style={styles.sheetCancelButtonText}>取消</Text>
+              <Text style={styles.sheetCancelButtonText}>{common.cancel}</Text>
             </Pressable>
           </View>
         </View>
@@ -1503,7 +1492,7 @@ export default function App() {
               setSourceModalVisible(true);
             }}
           >
-            <Text style={styles.previewReselectButtonText}>重选图片</Text>
+            <Text style={styles.previewReselectButtonText}>{labels.previewReselect}</Text>
           </Pressable>
         </View>
       </Modal>
@@ -1528,15 +1517,15 @@ export default function App() {
           <View style={styles.sourceSheet}>
             <View style={styles.sourceTitleHintRow}>
               <Text style={[styles.sourceTitle, styles.sourceTitleFlex]}>
-                {clearMode === "all" && clearAllStep2 ? "再次确认：清空全部导入记录？" : "确认清空数据？"}
+                {clearMode === "all" && clearAllStep2 ? labels.clearDataTitleStep2 : labels.clearDataTitleStep1}
               </Text>
               {renderModuleInfoIcon(
-                "说明",
+                labels.clearDataHintTitle,
                 clearMode === "today" ? MODULE_HINT_TEXT.clearToday : MODULE_HINT_TEXT.clearAll
               )}
             </View>
             <Pressable style={styles.sheetButton} onPress={handleClearData}>
-              <Text style={styles.sheetButtonText}>{clearMode === "all" && !clearAllStep2 ? "下一步确认" : "确认清空"}</Text>
+              <Text style={styles.sheetButtonText}>{clearMode === "all" && !clearAllStep2 ? labels.clearDataNext : labels.clearDataConfirm}</Text>
             </Pressable>
             <Pressable
               style={styles.sheetCancelButton}
@@ -1545,7 +1534,7 @@ export default function App() {
                 setClearAllStep2(false);
               }}
             >
-              <Text style={styles.sheetCancelButtonText}>取消</Text>
+              <Text style={styles.sheetCancelButtonText}>{common.cancel}</Text>
             </Pressable>
           </View>
         </View>
@@ -1566,31 +1555,31 @@ export default function App() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.ocrRuleModalScroll}
               >
-              <Text style={styles.ocrRuleModalTitle}>{ocrRuleEditingId ? "编辑规则" : "添加规则"}</Text>
+              <Text style={styles.ocrRuleModalTitle}>{ocrRuleEditingId ? labels.ocrRuleModalEdit : labels.ocrRuleModalAdd}</Text>
               <View style={styles.settingsSubLabelHintRow}>
-                <Text style={styles.settingsSubLabel}>原文（锚点关键词）</Text>
-                {renderModuleInfoIcon("原文（锚点关键词）", MODULE_HINT_TEXT.ocrRuleSource)}
+                <Text style={styles.settingsSubLabel}>{labels.ocrRuleSourceCaption}</Text>
+                {renderModuleInfoIcon(labels.ocrRuleSourceCaption, MODULE_HINT_TEXT.ocrRuleSource)}
               </View>
               <TextInput
                 value={ruleDraftSource}
                 onChangeText={setRuleDraftSource}
-                placeholder="如 创业板指、存款"
+                placeholder={placeholders.ocrRuleSourceExample}
                 placeholderTextColor="#94a3b8"
                 style={styles.settingsFieldInput}
                 autoCorrect={false}
                 autoCapitalize="none"
                 multiline
               />
-              <Text style={styles.settingsSubLabel}>识别内容（金额名称默认值）</Text>
+              <Text style={styles.settingsSubLabel}>{labels.ocrRuleRecognizedCaption}</Text>
               <TextInput
                 value={ruleDraftContent}
                 onChangeText={setRuleDraftContent}
-                placeholder="如 存款"
+                placeholder={placeholders.ocrRuleContentExample}
                 placeholderTextColor="#94a3b8"
                 style={styles.settingsFieldInput}
                 autoCorrect={false}
               />
-              <Text style={styles.settingsSubLabel}>资产分类</Text>
+              <Text style={styles.settingsSubLabel}>{labels.ocrRuleAssetClassCaption}</Text>
               <View style={styles.settingsOcrPickerWrap}>
                 <View style={styles.classDisplayRow}>
                   <Text style={styles.classLabelText} numberOfLines={1}>
@@ -1610,8 +1599,8 @@ export default function App() {
                 </Picker>
               </View>
               <View style={styles.settingsSubLabelHintRow}>
-                <Text style={styles.settingsSubLabel}>限定页面（防跨 App 误匹配）</Text>
-                {renderModuleInfoIcon("限定页面", MODULE_HINT_TEXT.ocrRuleScope)}
+                <Text style={styles.settingsSubLabel}>{labels.ocrRuleScopeCaption}</Text>
+                {renderModuleInfoIcon(labels.ruleColScope, MODULE_HINT_TEXT.ocrRuleScope)}
               </View>
               <View style={[styles.settingsOcrPickerWrap, styles.settingsOcrScopePickerWrap]}>
                 <View style={styles.settingsScopeDisplayRow}>
@@ -1632,7 +1621,7 @@ export default function App() {
                   {customRecognitionModules.map((m) => (
                     <Picker.Item
                       key={`ocr-scope-cm-${m.id}`}
-                      label={`仅「${m.displayName}」`}
+                      label={fmt.scopePickerOnlyModule(m.displayName)}
                       value={`${OCR_CUSTOM_MODULE_SCOPE_PREFIX}${m.id}`}
                     />
                   ))}
@@ -1652,17 +1641,17 @@ export default function App() {
               <View style={styles.ocrRuleModalActions}>
                 {ocrRuleEditingId ? (
                   <Pressable style={styles.ocrRuleModalDeleteButton} onPress={confirmDeleteOcrRuleInModal}>
-                    <Text style={styles.ocrRuleModalDeleteText}>删除规则</Text>
+                    <Text style={styles.ocrRuleModalDeleteText}>{labels.ocrRuleDelete}</Text>
                   </Pressable>
                 ) : (
                   <View style={styles.ocrRuleModalActionsSpacer} />
                 )}
                 <View style={styles.ocrRuleModalActionsRight}>
                   <Pressable style={styles.ocrRuleModalSecondaryButton} onPress={closeOcrRuleModal}>
-                    <Text style={styles.ocrRuleModalSecondaryText}>取消</Text>
+                    <Text style={styles.ocrRuleModalSecondaryText}>{common.cancel}</Text>
                   </Pressable>
                   <Pressable style={styles.ocrRuleModalPrimaryButton} onPress={() => void handleSaveOcrCustomRuleFromModal()}>
-                    <Text style={styles.ocrRuleModalPrimaryText}>保存</Text>
+                    <Text style={styles.ocrRuleModalPrimaryText}>{common.save}</Text>
                   </Pressable>
                 </View>
               </View>
@@ -1676,14 +1665,14 @@ export default function App() {
         <SafeAreaView style={styles.customModuleWizardSafe}>
           <View style={styles.customModuleWizardHeader}>
             <View style={styles.customModuleWizardTitleRow}>
-              <Text style={styles.customModuleWizardTitle}>新增识别模块</Text>
-              {renderModuleInfoIcon("新增识别模块", MODULE_HINT_TEXT.wizardOverview)}
+              <Text style={styles.customModuleWizardTitle}>{labels.wizardTitleNew}</Text>
+              {renderModuleInfoIcon(labels.wizardTitleNew, MODULE_HINT_TEXT.wizardOverview)}
             </View>
             <Pressable style={styles.customModuleWizardHeaderCloseHit} onPress={closeCustomModuleWizard} hitSlop={12}>
-              <Text style={styles.customModuleWizardCloseText}>关闭</Text>
+              <Text style={styles.customModuleWizardCloseText}>{common.close}</Text>
             </Pressable>
           </View>
-          <Text style={styles.customModuleWizardStep}>步骤 {wizardStep} / 5</Text>
+          <Text style={styles.customModuleWizardStep}>{labels.wizardStep(wizardStep)}</Text>
           {wizardError ? <Text style={[styles.warn, styles.customModuleWizardErr]}>{wizardError}</Text> : null}
           <ScrollView
             style={styles.customModuleWizardScrollFlex}
@@ -1697,19 +1686,19 @@ export default function App() {
                   <Image source={{ uri: wizardUri }} style={styles.customModuleWizardPreview} resizeMode="contain" />
                 ) : null}
                 <Pressable style={styles.sheetButton} onPress={() => void wizardPickSingleFromGallery()}>
-                  <Text style={styles.sheetButtonText}>从相册选择</Text>
+                  <Text style={styles.sheetButtonText}>{labels.pickFromAlbum}</Text>
                 </Pressable>
                 <Pressable style={styles.sheetButton} onPress={() => void wizardPickSingleFromFiles()}>
-                  <Text style={styles.sheetButtonText}>从文件选择</Text>
+                  <Text style={styles.sheetButtonText}>{labels.pickFromFiles}</Text>
                 </Pressable>
               </View>
             ) : null}
             {wizardStep === 2 ? (
               <View style={styles.customModuleWizardStepBody}>
-                {wizardOcrLoading ? <Text style={styles.muted}>OCR 识别中…</Text> : null}
+                {wizardOcrLoading ? <Text style={styles.muted}>{labels.wizardOcrLoading}</Text> : null}
                 <Pressable style={styles.addRowButton} onPress={() => setWizardOcrExpanded((v) => !v)}>
                   <Text style={styles.addRowButtonText}>
-                    {wizardOcrExpanded ? "收起 OCR 原文" : "查看 OCR 原文"}
+                    {wizardOcrExpanded ? labels.wizardOcrToggleExpand : labels.wizardOcrToggleCollapse}
                   </Text>
                 </Pressable>
                 {wizardOcrExpanded ? (
@@ -1728,62 +1717,60 @@ export default function App() {
                   onChangeText={setWizardKeywordsText}
                   multiline
                   style={[styles.settingsFieldInput, styles.customModuleWizardKeywordInput]}
-                  placeholder="多个词用空格、逗号或分号分隔"
+                  placeholder={placeholders.keywordsMulti}
                   placeholderTextColor="#94a3b8"
                   autoCorrect={false}
                 />
                 <Text style={styles.muted}>
-                  当前拆分为：{splitRecognitionKeywords(wizardKeywordsText).join(" · ") || "（无）"}
+                  {labels.keywordSplitPrefix}
+                  {splitRecognitionKeywords(wizardKeywordsText).join(" · ") || labels.keywordSplitNone}
                 </Text>
               </View>
             ) : null}
             {wizardStep === 4 ? (
               <View style={styles.customModuleWizardStepBody}>
                 <View style={styles.settingsSubLabelHintRow}>
-                  <Text style={styles.settingsSubLabel}>模块展示名称</Text>
-                  {renderModuleInfoIcon("模块展示名称", "将显示在首页对应折线图标题与设置中的模块列表中。")}
+                  <Text style={styles.settingsSubLabel}>{labels.wizardModuleNameCaption}</Text>
+                  {renderModuleInfoIcon(labels.wizardModuleNameHintPopoverTitle, labels.wizardModuleNameHintPopoverBody)}
                 </View>
                 <TextInput
                   value={wizardModuleName}
                   onChangeText={setWizardModuleName}
                   style={styles.settingsFieldInput}
-                  placeholder="例如：创业板指关注"
+                  placeholder={placeholders.moduleDisplayExample}
                   placeholderTextColor="#94a3b8"
                 />
               </View>
             ) : null}
             {wizardStep === 5 ? (
               <View style={styles.customModuleWizardStepBody}>
-                <Text style={styles.line}>模块名称：{wizardModuleName.trim() || "—"}</Text>
-                <Text style={styles.line}>匹配用词（任一命中即可）：</Text>
-                <Text style={styles.muted}>{splitRecognitionKeywords(wizardKeywordsText).join(" · ") || "—"}</Text>
+                <Text style={styles.line}>{fmt.wizardModuleSummary(wizardModuleName.trim())}</Text>
+                <Text style={styles.line}>{labels.moduleWizardSummaryKeywords}</Text>
+                <Text style={styles.muted}>{splitRecognitionKeywords(wizardKeywordsText).join(" · ") || common.dash}</Text>
                 <View style={styles.settingsSubLabelHintRow}>
-                  <Text style={styles.settingsSubLabel}>提交说明</Text>
-                  {renderModuleInfoIcon(
-                    "提交说明",
-                    "提交后，新导入在「确认并记录」时会写入 OCR；当某日快照的合并 OCR 命中上述任一词时，该日该次导入解析出的资产总额会计入此模块折线图（与内置微信 / 支付宝 / 招行模块并列）。"
-                  )}
+                  <Text style={styles.settingsSubLabel}>{labels.wizardSubmitHintTitle}</Text>
+                  {renderModuleInfoIcon(labels.wizardSubmitHintTitle, labels.wizardSubmitHintBody)}
                 </View>
               </View>
             ) : null}
           </ScrollView>
           <View style={styles.customModuleWizardFooter}>
             <Pressable style={styles.customModuleWizardExitButton} onPress={closeCustomModuleWizard}>
-              <Text style={styles.customModuleWizardExitText}>退出向导</Text>
+              <Text style={styles.customModuleWizardExitText}>{labels.wizardExit}</Text>
             </Pressable>
             <View style={styles.customModuleWizardFooterRight}>
               {wizardStep > 1 ? (
                 <Pressable style={styles.ocrRuleModalSecondaryButton} onPress={wizardGoPrev}>
-                  <Text style={styles.ocrRuleModalSecondaryText}>上一步</Text>
+                  <Text style={styles.ocrRuleModalSecondaryText}>{common.prev}</Text>
                 </Pressable>
               ) : null}
               {wizardStep < 5 ? (
                 <Pressable style={styles.ocrRuleModalPrimaryButton} onPress={wizardGoNext}>
-                  <Text style={styles.ocrRuleModalPrimaryText}>{wizardStep === 1 ? "下一步（开始 OCR）" : "下一步"}</Text>
+                  <Text style={styles.ocrRuleModalPrimaryText}>{wizardStep === 1 ? labels.wizardNextWithOcr : common.next}</Text>
                 </Pressable>
               ) : (
                 <Pressable style={styles.ocrRuleModalPrimaryButton} onPress={() => void submitCustomRecognitionModule()}>
-                  <Text style={styles.ocrRuleModalPrimaryText}>提交</Text>
+                  <Text style={styles.ocrRuleModalPrimaryText}>{common.submit}</Text>
                 </Pressable>
               )}
             </View>
@@ -1795,11 +1782,11 @@ export default function App() {
         <SafeAreaView style={styles.customModuleWizardSafe}>
           <View style={styles.customModuleWizardHeader}>
             <View style={styles.customModuleWizardTitleRow}>
-              <Text style={styles.customModuleWizardTitle}>配置识别模块</Text>
-              {renderModuleInfoIcon("配置识别模块", MODULE_HINT_TEXT.configModule)}
+              <Text style={styles.customModuleWizardTitle}>{labels.wizardTitleEdit}</Text>
+              {renderModuleInfoIcon(labels.wizardTitleEdit, MODULE_HINT_TEXT.configModule)}
             </View>
             <Pressable style={styles.customModuleWizardHeaderCloseHit} onPress={closeCustomModuleConfig} hitSlop={12}>
-              <Text style={styles.customModuleWizardCloseText}>关闭</Text>
+              <Text style={styles.customModuleWizardCloseText}>{common.close}</Text>
             </Pressable>
           </View>
           <ScrollView
@@ -1809,31 +1796,32 @@ export default function App() {
             showsVerticalScrollIndicator={false}
           >
             {editCmError ? <Text style={[styles.warn, styles.customModuleWizardErr]}>{editCmError}</Text> : null}
-            <Text style={styles.settingsSubLabel}>模块展示名称</Text>
+            <Text style={styles.settingsSubLabel}>{labels.wizardModuleNameCaption}</Text>
             <TextInput
               value={editCmDisplayName}
               onChangeText={setEditCmDisplayName}
               style={styles.settingsFieldInput}
-              placeholder="例如：创业板指关注"
+              placeholder={placeholders.moduleDisplayExample}
               placeholderTextColor="#94a3b8"
               editable={!editCmSaving}
             />
             <View style={styles.settingsSubLabelHintRow}>
-              <Text style={styles.settingsSubLabel}>匹配用词（任一命中即可）</Text>
-              {renderModuleInfoIcon("匹配用词", MODULE_HINT_TEXT.configKeywords)}
+              <Text style={styles.settingsSubLabel}>{labels.configKeywordsCaption}</Text>
+              {renderModuleInfoIcon(labels.configKeywordsCaption, MODULE_HINT_TEXT.configKeywords)}
             </View>
             <TextInput
               value={editCmKeywordsText}
               onChangeText={setEditCmKeywordsText}
               multiline
               style={[styles.settingsFieldInput, styles.customModuleWizardKeywordInput]}
-              placeholder="多个词用空格、逗号或分号分隔"
+              placeholder={placeholders.keywordsMulti}
               placeholderTextColor="#94a3b8"
               autoCorrect={false}
               editable={!editCmSaving}
             />
             <Text style={styles.muted}>
-              当前拆分为：{splitRecognitionKeywords(editCmKeywordsText).join(" · ") || "（无）"}
+              {labels.keywordSplitPrefix}
+              {splitRecognitionKeywords(editCmKeywordsText).join(" · ") || labels.keywordSplitNone}
             </Text>
           </ScrollView>
           <View style={styles.customModuleConfigFooter}>
@@ -1842,14 +1830,14 @@ export default function App() {
               onPress={confirmDeleteCustomModule}
               disabled={editCmSaving}
             >
-              <Text style={styles.ocrRuleModalDeleteText}>删除此模块</Text>
+              <Text style={styles.ocrRuleModalDeleteText}>{labels.configDeleteModule}</Text>
             </Pressable>
             <Pressable
               style={[styles.ocrRuleModalPrimaryButton, editCmSaving ? styles.customModuleConfigSaveDisabled : null]}
               onPress={() => void saveCustomModuleConfig()}
               disabled={editCmSaving}
             >
-              <Text style={styles.ocrRuleModalPrimaryText}>{editCmSaving ? "保存中…" : "保存修改"}</Text>
+              <Text style={styles.ocrRuleModalPrimaryText}>{editCmSaving ? common.saving : labels.customModuleConfigSave}</Text>
             </Pressable>
           </View>
         </SafeAreaView>
@@ -1858,10 +1846,10 @@ export default function App() {
       <ScrollView nestedScrollEnabled contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
         <View style={styles.heroCard}>
           <View style={styles.heroTopRow}>
-            <Text style={styles.heroHint}>目前为止总资产(元)</Text>
+            <Text style={styles.heroHint}>{labels.heroTotalHint}</Text>
             <View style={styles.heroActions}>
               <Pressable style={[styles.manageButton, modulePressOpacityStyle()]} onPress={() => setManageVisible(true)}>
-                <Text style={styles.manageButtonText}>导入</Text>
+                <Text style={styles.manageButtonText}>{labels.importButton}</Text>
               </Pressable>
               <Pressable style={[styles.settingsGearButton, modulePressOpacityStyle()]} onPress={() => setSettingsVisible(true)}>
                 <Text style={styles.settingsGearText}>⚙</Text>
@@ -1869,29 +1857,29 @@ export default function App() {
             </View>
           </View>
           <Text style={styles.heroTotal}>{formatDisplayAmount(dailySummary.total)}</Text>
-          {dbInitError ? <Text style={styles.heroError}>数据库异常：{dbInitError}</Text> : null}
+          {dbInitError ? <Text style={styles.heroError}>{fmt.heroDbErrorLine(dbInitError)}</Text> : null}
           <View style={styles.quickStatsColumn}>
             <View style={styles.quickStatRow}>
               <View style={styles.quickStatItem}>
-                <Text style={styles.quickStatLabel}>余额宝/现金</Text>
+                <Text style={styles.quickStatLabel}>{labels.quickStatCash}</Text>
                 <Text style={styles.quickStatValue}>{cashAmount.toFixed(2)}</Text>
               </View>
               <View style={styles.quickStatItem}>
-                <Text style={styles.quickStatLabel}>基金</Text>
+                <Text style={styles.quickStatLabel}>{labels.quickStatFund}</Text>
                 <Text style={styles.quickStatValue}>{fundAmount.toFixed(2)}</Text>
               </View>
               <View style={styles.quickStatItem}>
-                <Text style={styles.quickStatLabel}>保险</Text>
+                <Text style={styles.quickStatLabel}>{labels.quickStatInsurance}</Text>
                 <Text style={styles.quickStatValue}>{insuranceAmount.toFixed(2)}</Text>
               </View>
             </View>
             <View style={styles.quickStatRow}>
               <View style={styles.quickStatItem}>
-                <Text style={styles.quickStatLabel}>股票</Text>
+                <Text style={styles.quickStatLabel}>{labels.quickStatStock}</Text>
                 <Text style={styles.quickStatValue}>{stockAmount.toFixed(2)}</Text>
               </View>
               <View style={styles.quickStatItem}>
-                <Text style={styles.quickStatLabel}>理财</Text>
+                <Text style={styles.quickStatLabel}>{labels.quickStatWealth}</Text>
                 <Text style={styles.quickStatValue}>{wealthManagementAmount.toFixed(2)}</Text>
               </View>
             </View>
@@ -1910,9 +1898,9 @@ export default function App() {
             <View style={styles.trendHeaderTitleCluster}>
               <View style={styles.cardTitleHintRow}>
                 <Text style={styles.cardTitle} numberOfLines={1}>
-                  资金趋势折线图
+                  {labels.trendMainChartTitle}
                 </Text>
-                {renderModuleInfoIcon("资金趋势折线图", MODULE_HINT_TEXT.trendChart, true)}
+                {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
               </View>
             </View>
             {renderTrendTypePicker("trend-main")}
@@ -1920,12 +1908,12 @@ export default function App() {
           <TrendLineChart
             points={trendPoints}
             breakdownByClass={mainTrendBreakdown}
-            primarySeriesLabel="全部"
+            primarySeriesLabel={labels.chartPrimaryAll}
             chartTooltipOpacity={moduleControlOpacity}
           />
           {debugJsonDumpsVisible ? (
             <>
-              <Text style={styles.debugDumpLabel}>本图折线数据结构（调试）</Text>
+              <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
               {renderDebugJsonScroll(trendChartsStructureDebugText.trendMain)}
             </>
           ) : null}
@@ -1952,12 +1940,12 @@ export default function App() {
             <TrendLineChart
               points={platformTrendPoints[platform]}
               breakdownByClass={platformTrendBreakdown[platform]}
-              primarySeriesLabel="全部"
+              primarySeriesLabel={labels.chartPrimaryAll}
               chartTooltipOpacity={moduleControlOpacity}
             />
             {debugJsonDumpsVisible ? (
               <>
-                <Text style={styles.debugDumpLabel}>本图折线数据结构（调试）</Text>
+                <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
                 {renderDebugJsonScroll(
                   platform === "alipay"
                     ? trendChartsStructureDebugText.platformAlipay
@@ -1982,7 +1970,7 @@ export default function App() {
             <View style={styles.trendHeaderRow}>
               <View style={styles.trendHeaderTitleCluster}>
                 <Text style={styles.cardTitle} numberOfLines={1}>
-                  {m.displayName}趋势
+                  {fmt.customModuleTrendTitle(m.displayName)}
                 </Text>
               </View>
               {renderTrendTypePicker(`cm-${m.id}`)}
@@ -1990,12 +1978,12 @@ export default function App() {
             <TrendLineChart
               points={customModuleTrendPoints[m.id] ?? []}
               breakdownByClass={customModuleTrendBreakdown[m.id]}
-              primarySeriesLabel="全部"
+              primarySeriesLabel={labels.chartPrimaryAll}
               chartTooltipOpacity={moduleControlOpacity}
             />
             {debugJsonDumpsVisible ? (
               <>
-                <Text style={styles.debugDumpLabel}>本图折线数据结构（调试）</Text>
+                <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
                 {renderDebugJsonScroll(trendChartsStructureDebugText.customModules[m.id] ?? "{}")}
               </>
             ) : null}
@@ -2006,9 +1994,9 @@ export default function App() {
       {settingsVisible ? (
         <SafeAreaView style={[styles.pageOverlay, { paddingTop: 16 + androidTopInset }]}>
           <View style={styles.settingsHeader}>
-            <Text style={styles.settingsTitle}>设置</Text>
+            <Text style={styles.settingsTitle}>{labels.settingsTitle}</Text>
             <Pressable onPress={() => setSettingsVisible(false)}>
-              <Text style={styles.settingsClose}>完成</Text>
+              <Text style={styles.settingsClose}>{common.done}</Text>
             </Pressable>
           </View>
           <ScrollView
@@ -2018,7 +2006,7 @@ export default function App() {
             showsVerticalScrollIndicator={false}
           >
           <View style={styles.settingsOpacityBarRow}>
-            <Text style={styles.settingsOpacityInlineLabel}>透明度：</Text>
+            <Text style={styles.settingsOpacityInlineLabel}>{labels.opacityLabel}</Text>
             <View
               style={styles.opacityTrackTouch}
               onLayout={(e) => {
@@ -2053,21 +2041,21 @@ export default function App() {
           </View>
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>隐私与安全</Text>
-              {renderModuleInfoIcon("隐私与安全", MODULE_HINT_TEXT.privacy, true)}
+              <Text style={styles.settingsLabel}>{labels.privacyTitle}</Text>
+              {renderModuleInfoIcon(labels.privacyTitle, MODULE_HINT_TEXT.privacy, true)}
             </View>
             {biometricAvailable ? (
               <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={handleToggleBiometric}>
-                <Text style={styles.securityActionButtonText}>{biometricEnabled ? "关闭生物识别解锁" : "开启生物识别解锁"}</Text>
+                <Text style={styles.securityActionButtonText}>{biometricEnabled ? labels.biometricToggleOff : labels.biometricToggleOn}</Text>
               </Pressable>
             ) : (
-              <Text style={styles.muted}>当前设备未检测到可用的生物识别能力。</Text>
+              <Text style={styles.muted}>{labels.biometricUnavailable}</Text>
             )}
           </View>
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>模块展示</Text>
-              {renderModuleInfoIcon("模块展示", MODULE_HINT_TEXT.moduleDisplay, true)}
+              <Text style={styles.settingsLabel}>{labels.moduleDisplayTitle}</Text>
+              {renderModuleInfoIcon(labels.moduleDisplayTitle, MODULE_HINT_TEXT.moduleDisplay, true)}
             </View>
             <View style={styles.tagArea}>
               {visiblePlatformModules.map((platform) => (
@@ -2135,41 +2123,41 @@ export default function App() {
 
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>新增识别模块</Text>
-              {renderModuleInfoIcon("新增识别模块", MODULE_HINT_TEXT.newCustomModule, true)}
+              <Text style={styles.settingsLabel}>{labels.newModuleTitle}</Text>
+              {renderModuleInfoIcon(labels.newModuleTitle, MODULE_HINT_TEXT.newCustomModule, true)}
             </View>
             {customModuleNotice ? <Text style={styles.muted}>{customModuleNotice}</Text> : null}
             <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={openCustomModuleWizard}>
-              <Text style={styles.securityActionButtonText}>打开配置向导</Text>
+              <Text style={styles.securityActionButtonText}>{labels.openModuleWizard}</Text>
             </Pressable>
           </View>
 
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>自定义 OCR 识别规则</Text>
-              {renderModuleInfoIcon("自定义 OCR 识别规则", MODULE_HINT_TEXT.ocrRules, true)}
+              <Text style={styles.settingsLabel}>{labels.ocrRulesTitle}</Text>
+              {renderModuleInfoIcon(labels.ocrRulesTitle, MODULE_HINT_TEXT.ocrRules, true)}
             </View>
             {customRuleNotice ? (
-              <Text style={customRuleNotice.includes("已保存") ? styles.muted : styles.warn}>{customRuleNotice}</Text>
+              <Text style={customRuleNotice.includes(notices.customRuleSavedToken) ? styles.muted : styles.warn}>{customRuleNotice}</Text>
             ) : null}
             {ocrCustomRules.length ? (
               <View style={styles.settingsRuleListSection}>
                 <View style={styles.settingsSubLabelHintRow}>
-                  <Text style={styles.settingsSubLabel}>已添加的规则</Text>
-                  {renderModuleInfoIcon("已添加的规则", MODULE_HINT_TEXT.ocrRulesList, true)}
+                  <Text style={styles.settingsSubLabel}>{labels.ocrRulesAddedCaption}</Text>
+                  {renderModuleInfoIcon(labels.ocrRulesAddedCaption, MODULE_HINT_TEXT.ocrRulesList, true)}
                 </View>
                 <View style={[styles.assetTableHeaderRow, styles.ruleListColumnsGap]}>
                   <View style={styles.ruleColSource}>
-                    <Text style={styles.fieldCaption}>原文</Text>
+                    <Text style={styles.fieldCaption}>{labels.ruleColSource}</Text>
                   </View>
                   <View style={styles.ruleColContent}>
-                    <Text style={styles.fieldCaption}>识别内容</Text>
+                    <Text style={styles.fieldCaption}>{labels.ruleColContent}</Text>
                   </View>
                   <View style={styles.ruleColClass}>
-                    <Text style={styles.fieldCaption}>分类</Text>
+                    <Text style={styles.fieldCaption}>{labels.ruleColClass}</Text>
                   </View>
                   <View style={styles.ruleColScope}>
-                    <Text style={styles.fieldCaption}>限定页面</Text>
+                    <Text style={styles.fieldCaption}>{labels.ruleColScope}</Text>
                   </View>
                 </View>
                 {ocrCustomRules.map((rule) => (
@@ -2216,18 +2204,18 @@ export default function App() {
                 ))}
               </View>
             ) : (
-              <Text style={styles.muted}>暂无自定义规则。点击下方按钮添加。</Text>
+              <Text style={styles.muted}>{labels.noCustomRules}</Text>
             )}
             <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={openOcrRuleModalForCreate}>
-              <Text style={styles.securityActionButtonText}>添加规则</Text>
+              <Text style={styles.securityActionButtonText}>{labels.addRule}</Text>
             </Pressable>
           </View>
           {debugJsonDumpsVisible ? (
             <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
               <View style={styles.settingsLabelHintRow}>
-                <Text style={styles.settingsLabel}>已存快照（调试用）</Text>
+                <Text style={styles.settingsLabel}>{labels.snapshotsDebugTitle}</Text>
               </View>
-              <Text style={styles.muted}>从本地加密库读取当前所有快照 JSON，便于对照折线。OCR 正文过长会截断。</Text>
+              <Text style={styles.muted}>{labels.snapshotsDebugHint}</Text>
               <View style={styles.debugDumpToolbar}>
                 <Pressable
                   style={[styles.securityActionButton, modulePressOpacityStyle(), persistedSnapshotsDebugBusy && { opacity: 0.6 }]}
@@ -2235,20 +2223,20 @@ export default function App() {
                   disabled={persistedSnapshotsDebugBusy}
                 >
                   <Text style={styles.securityActionButtonText}>
-                    {persistedSnapshotsDebugBusy ? "加载中…" : "刷新已存数据"}
+                    {persistedSnapshotsDebugBusy ? common.loading : labels.refreshSnapshots}
                   </Text>
                 </Pressable>
               </View>
-              {renderDebugJsonScroll(persistedSnapshotsDebugText || "（点击「刷新已存数据」）", "tall")}
+              {renderDebugJsonScroll(persistedSnapshotsDebugText || labels.snapshotsDebugPlaceholder, "tall")}
             </View>
           ) : null}
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <View style={styles.settingsDataCleanupRow}>
               <View style={styles.settingsDataCleanupTitleCluster}>
                 <Text style={styles.settingsLabel} numberOfLines={1} ellipsizeMode="tail">
-                  数据清理
+                  {labels.dataCleanupTitle}
                 </Text>
-                {renderModuleInfoIcon("数据清理", MODULE_HINT_TEXT.dataCleanup, true)}
+                {renderModuleInfoIcon(labels.dataCleanupTitle, MODULE_HINT_TEXT.dataCleanup, true)}
               </View>
               <View style={styles.clearActionRowModal}>
                 <Pressable
@@ -2258,7 +2246,7 @@ export default function App() {
                     setClearAllStep2(false);
                   }}
                 >
-                  <Text style={styles.clearActionText}>清空今日</Text>
+                  <Text style={styles.clearActionText}>{labels.clearToday}</Text>
                 </Pressable>
                 <Pressable
                   style={[styles.clearActionButtonDanger, modulePressOpacityStyle()]}
@@ -2267,7 +2255,7 @@ export default function App() {
                     setClearAllStep2(false);
                   }}
                 >
-                  <Text style={styles.clearActionText}>清空全部导入</Text>
+                  <Text style={styles.clearActionText}>{labels.clearAllImports}</Text>
                 </Pressable>
               </View>
             </View>
@@ -2276,9 +2264,9 @@ export default function App() {
             <View style={styles.settingsDataCleanupRow}>
               <View style={styles.settingsDataCleanupTitleCluster}>
                 <Text style={styles.settingsLabel} numberOfLines={1} ellipsizeMode="tail">
-                  测试数据
+                  {labels.seedTestDataTitle}
                 </Text>
-                {renderModuleInfoIcon("测试数据", MODULE_HINT_TEXT.seedTestData, true)}
+                {renderModuleInfoIcon(labels.seedTestDataTitle, MODULE_HINT_TEXT.seedTestData, true)}
               </View>
               <View style={styles.clearActionRowModal}>
                 <Pressable
@@ -2290,7 +2278,7 @@ export default function App() {
                   onPress={promptWriteSeedTestData}
                 >
                   <Text style={styles.clearActionText}>
-                    {seedTestBusy ? "处理中…" : "写入测试数据"}
+                    {seedTestBusy ? common.processing : labels.seedWriteTestData}
                   </Text>
                 </Pressable>
                 <Pressable
@@ -2301,19 +2289,17 @@ export default function App() {
                   disabled={!dbReady || seedTestBusy}
                   onPress={promptClearSeedTestData}
                 >
-                  <Text style={styles.clearActionText}>清除测试数据</Text>
+                  <Text style={styles.clearActionText}>{labels.clearSeedData}</Text>
                 </Pressable>
               </View>
             </View>
-            <Text style={styles.seedTestDebugToggleHint}>
-              开启后显示首页各折线图 JSON、导入页写入预览与本页已存快照；关闭后隐藏。
-            </Text>
+            <Text style={styles.seedTestDebugToggleHint}>{labels.debugJsonToggleHint}</Text>
             <Pressable
               style={[styles.securityActionButton, modulePressOpacityStyle(), styles.seedTestDebugToggleButton]}
               onPress={() => setDebugJsonDumpsVisible((v) => !v)}
             >
               <Text style={styles.securityActionButtonText}>
-                {debugJsonDumpsVisible ? "隐藏调试数据" : "显示调试数据"}
+                {debugJsonDumpsVisible ? labels.toggleDebugHide : labels.toggleDebugShow}
               </Text>
             </Pressable>
           </View>
@@ -2324,22 +2310,22 @@ export default function App() {
       {manageVisible ? (
         <SafeAreaView style={[styles.pageOverlay, { paddingTop: 16 + androidTopInset }]}>
           <View style={styles.settingsHeader}>
-            <Text style={styles.settingsTitle}>数据管理</Text>
+            <Text style={styles.settingsTitle}>{labels.settingsDataTitle}</Text>
             <Pressable onPress={() => setManageVisible(false)}>
-              <Text style={styles.settingsClose}>完成</Text>
+              <Text style={styles.settingsClose}>{common.done}</Text>
             </Pressable>
           </View>
           <ScrollView nestedScrollEnabled contentContainerStyle={styles.manageContent}>
             <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
               <View style={styles.sectionHeaderRow}>
                 <View style={[styles.cardTitleHintRow, styles.cardTitleHintRowGrow]}>
-                  <Text style={styles.cardTitle}>截图导入</Text>
-                  {renderModuleInfoIcon("截图导入", MODULE_HINT_TEXT.screenshotImport, true)}
+                  <Text style={styles.cardTitle}>{labels.cardScreenshotImport}</Text>
+                  {renderModuleInfoIcon(labels.cardScreenshotImport, MODULE_HINT_TEXT.screenshotImport, true)}
                 </View>
                 <View style={styles.sectionHeaderActions}>
                   {selectedImageUris.length ? (
                     <Pressable style={[styles.retryButton, modulePressOpacityStyle()]} onPress={handleRetryRecognition}>
-                      <Text style={styles.retryButtonText}>{ocrLoading ? "识别中..." : "重新识别"}</Text>
+                      <Text style={styles.retryButtonText}>{ocrLoading ? labels.recognizing : labels.retryRecognize}</Text>
                     </Pressable>
                   ) : null}
                 </View>
@@ -2366,49 +2352,52 @@ export default function App() {
                 ))}
                 {selectedImageUris.length < 6 ? (
                   <Pressable style={[styles.previewTileAdd, modulePressOpacityStyle()]} onPress={() => setSourceModalVisible(true)}>
-                    <Text style={styles.previewTileHint}>+ 导入</Text>
+                    <Text style={styles.previewTileHint}>{labels.importTileAdd}</Text>
                   </Pressable>
                 ) : null}
               </View>
-              {selectedImageUris.length ? <Text style={styles.muted}>已导入 {selectedImageUris.length}/6 张，点击可预览</Text> : null}
+              {selectedImageUris.length ? <Text style={styles.muted}>{labels.importCountHint(selectedImageUris.length)}</Text> : null}
               {ocrError ? (
                 <View style={styles.errorBanner}>
-                  <Text style={styles.errorBannerTitle}>导入失败</Text>
+                  <Text style={styles.errorBannerTitle}>{labels.importFailedTitle}</Text>
                   <Text style={styles.errorBannerText}>{ocrError}</Text>
                 </View>
               ) : null}
-              {dbInitError ? <Text style={styles.error}>数据库初始化失败：{dbInitError}</Text> : null}
+              {dbInitError ? <Text style={styles.error}>{fmt.dbInitFailed(dbInitError)}</Text> : null}
             </View>
 
             <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
               <View style={[styles.cardTitleHintRow, styles.cardTitleHintRowGrow]}>
-                <Text style={styles.cardTitle}>解析结果（可修改）</Text>
-                {renderModuleInfoIcon("解析结果（可修改）", MODULE_HINT_TEXT.parseResult, true)}
+                <Text style={styles.cardTitle}>{labels.cardParseResult}</Text>
+                {renderModuleInfoIcon(labels.cardParseResult, MODULE_HINT_TEXT.parseResult, true)}
               </View>
               {groupedEditableAssets.map((group) => (
                 <View style={styles.parseGroup} key={group.uri}>
                   <View style={styles.parseGroupHeader}>
-                    <Text style={styles.parseGroupTitle}>页面 {group.index + 1}</Text>
-                    <Text style={styles.parseGroupTotal}>当前页面总额：{group.total.toFixed(2)}</Text>
+                    <Text style={styles.parseGroupTitle}>{fmt.parseGroupTitle(group.index)}</Text>
+                    <Text style={styles.parseGroupTotal}>
+                      {labels.parsePageTotal}
+                      {group.total.toFixed(2)}
+                    </Text>
                   </View>
                   <Text style={styles.line}>
-                    页面类型：
+                    {labels.parseScreenTypeCaption}
                     {group.meta?.parseResult.screenDisplayLabel ??
                       SCREEN_TYPE_LABEL[group.meta?.parseResult.screenType ?? "unknown"]}
                   </Text>
                   <Pressable style={[styles.addRowButton, modulePressOpacityStyle()]} onPress={() => addManualAssetRow(group.uri)}>
-                    <Text style={styles.addRowButtonText}>+ 手动添加一行</Text>
+                    <Text style={styles.addRowButtonText}>{labels.addRowManual}</Text>
                   </Pressable>
                   {group.assets.length ? (
                     <View style={styles.assetTableHeaderRow}>
                       <View style={styles.assetNameColumn}>
-                        <Text style={styles.fieldCaption}>金额名称</Text>
+                        <Text style={styles.fieldCaption}>{labels.fieldAmountName}</Text>
                       </View>
                       <View style={styles.assetAmountWrap}>
-                        <Text style={styles.fieldCaption}>金额</Text>
+                        <Text style={styles.fieldCaption}>{labels.fieldAmount}</Text>
                       </View>
                       <View style={styles.classPickerColumn}>
-                        <Text style={styles.fieldCaption}>分类</Text>
+                        <Text style={styles.fieldCaption}>{labels.fieldClass}</Text>
                       </View>
                     </View>
                   ) : null}
@@ -2428,7 +2417,7 @@ export default function App() {
                               value={asset.name}
                               onChangeText={(value) => updateAssetName(asset.localId, value)}
                               style={styles.assetNameInput}
-                              placeholder="金额名称"
+                              placeholder={placeholders.amountName}
                               placeholderTextColor="#94a3b8"
                             />
                           </View>
@@ -2441,7 +2430,7 @@ export default function App() {
                             style={styles.assetAmountInput}
                             autoCorrect={false}
                             autoCapitalize="none"
-                            placeholder="金额"
+                            placeholder={placeholders.amount}
                             placeholderTextColor="#94a3b8"
                           />
                           {asset.amountError ? <Text style={styles.assetAmountErrorText}>{asset.amountError}</Text> : null}
@@ -2482,12 +2471,12 @@ export default function App() {
                     <View style={styles.ocrDebugWrap}>
                       <Pressable style={[styles.addRowButton, modulePressOpacityStyle()]} onPress={() => toggleOcrText(group.uri)}>
                         <Text style={styles.addRowButtonText}>
-                          {expandedOcrUris.includes(group.uri) ? "收起 OCR 原文" : "查看 OCR 原文"}
+                          {expandedOcrUris.includes(group.uri) ? labels.wizardOcrToggleExpand : labels.wizardOcrToggleCollapse}
                         </Text>
                       </Pressable>
                       {expandedOcrUris.includes(group.uri) ? (
                         <>
-                          <Text style={styles.ocrSourceHint}>OCR 原文（长按可选中部分文字后复制）</Text>
+                          <Text style={styles.ocrSourceHint}>{labels.ocrSourceHint}</Text>
                           <ScrollView
                             nestedScrollEnabled
                             style={styles.ocrSelectableScroll}
@@ -2504,11 +2493,11 @@ export default function App() {
                 </View>
               ))}
               <Pressable style={[styles.confirmButton, modulePressOpacityStyle()]} onPress={handleConfirmSnapshot}>
-                <Text style={styles.confirmButtonText}>{saveLoading ? "记录中..." : "确认并记录"}</Text>
+                <Text style={styles.confirmButtonText}>{saveLoading ? labels.savingRecord : labels.confirmSave}</Text>
               </Pressable>
               {debugJsonDumpsVisible ? (
                 <>
-                  <Text style={styles.debugDumpLabel}>将写入库的预览（调试用）</Text>
+                  <Text style={styles.debugDumpLabel}>{labels.debugPendingSaveTitle}</Text>
                   {renderDebugJsonScroll(pendingSaveDebugText)}
                 </>
               ) : null}

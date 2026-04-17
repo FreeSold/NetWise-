@@ -1,5 +1,6 @@
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
 import { Pressable, SafeAreaView, Text, TextInput, View } from "react-native";
+import { common, lockScreen } from "../../copy";
 import { styles } from "../AppStyles";
 
 export type AppLockGateProps = {
@@ -45,8 +46,8 @@ export function AppLockGate(props: AppLockGateProps) {
       <SafeAreaView style={[styles.lockContainer, { paddingTop: 20 + androidTopInset }]}>
         <ExpoStatusBar style="light" />
         <View style={styles.lockCard}>
-          <Text style={styles.lockTitle}>NetWise 安全初始化中</Text>
-          <Text style={styles.lockSubtitle}>正在准备本地加密密钥...</Text>
+          <Text style={styles.lockTitle}>{lockScreen.initializingTitle}</Text>
+          <Text style={styles.lockSubtitle}>{lockScreen.initializingSubtitle}</Text>
         </View>
       </SafeAreaView>
     );
@@ -57,15 +58,17 @@ export function AppLockGate(props: AppLockGateProps) {
       <SafeAreaView style={[styles.lockContainer, { paddingTop: 20 + androidTopInset }]}>
         <ExpoStatusBar style="light" />
         <View style={styles.lockCard}>
-          <Text style={styles.lockTitle}>{hasPasscodeConfigured ? "输入口令解锁" : "首次使用，先设置口令"}</Text>
+          <Text style={styles.lockTitle}>
+            {hasPasscodeConfigured ? lockScreen.unlockTitle : lockScreen.firstRunTitle}
+          </Text>
           <Text style={styles.lockSubtitle}>
-            {hasPasscodeConfigured ? "本地资产数据已加密，解锁后才会展示。" : "请设置 6 位数字口令，后续启动 App 时需要输入。"}
+            {hasPasscodeConfigured ? lockScreen.unlockSubtitle : lockScreen.firstRunSubtitle}
           </Text>
           <TextInput
             value={passcodeInput}
             onChangeText={onChangePasscode}
             style={styles.lockInput}
-            placeholder="输入 6 位数字口令"
+            placeholder={lockScreen.passcodePlaceholder}
             placeholderTextColor="#94a3b8"
             secureTextEntry
             keyboardType="number-pad"
@@ -76,7 +79,7 @@ export function AppLockGate(props: AppLockGateProps) {
               value={passcodeConfirmInput}
               onChangeText={onChangePasscodeConfirm}
               style={styles.lockInput}
-              placeholder="再次输入口令"
+              placeholder={lockScreen.passcodeConfirmPlaceholder}
               placeholderTextColor="#94a3b8"
               secureTextEntry
               keyboardType="number-pad"
@@ -86,12 +89,12 @@ export function AppLockGate(props: AppLockGateProps) {
           {unlockError ? <Text style={styles.error}>{unlockError}</Text> : null}
           <Pressable style={styles.lockPrimaryButton} onPress={onPasscodeSubmit}>
             <Text style={styles.lockPrimaryButtonText}>
-              {securityBusy ? "处理中..." : hasPasscodeConfigured ? "解锁" : "保存并进入"}
+              {securityBusy ? common.processing : hasPasscodeConfigured ? lockScreen.unlock : lockScreen.saveAndEnter}
             </Text>
           </Pressable>
           {hasPasscodeConfigured && biometricAvailable && biometricEnabled ? (
             <Pressable style={styles.lockSecondaryButton} onPress={onBiometricUnlock}>
-              <Text style={styles.lockSecondaryButtonText}>使用生物识别解锁</Text>
+              <Text style={styles.lockSecondaryButtonText}>{lockScreen.biometricUnlock}</Text>
             </Pressable>
           ) : null}
         </View>
