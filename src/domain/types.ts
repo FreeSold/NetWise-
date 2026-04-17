@@ -54,6 +54,8 @@ export interface ParseResult {
   screenType: ScreenType | "unknown";
   /** 解析结果页「页面类型」优先展示此文案（如未识别到内置页但命中自定义模块时的模块名） */
   screenDisplayLabel?: string;
+  /** 关键词竞争中胜出的自定义识别模块 id（同分可能多个，保存时默认取第一个作为分桶主键） */
+  customModuleIds?: string[];
   assets: ParsedAsset[];
   reportedTotal?: number;
   warnings: string[];

@@ -174,18 +174,6 @@ function firstNumberAfterAnchorInCompact(compactLine: string, anchorCompact: str
   return parseMoney(m[0]);
 }
 
-/** 与自定义模块趋势、规则作用域一致：合并 OCR 去空白后，任一关键词子串命中即视为该模块匹配 */
-function matchingCustomModuleDisplayLabels(compactOcr: string, modules: CustomRecognitionModule[]): string[] {
-  const labels: string[] = [];
-  for (const mod of modules) {
-    const kws = mod.keywords.map((k) => compactForMatch(k.trim())).filter(Boolean);
-    if (kws.length && kws.some((k) => compactOcr.includes(k))) {
-      labels.push(mod.displayName);
-    }
-  }
-  return labels;
-}
-
 function ruleScreenScopeAllows(
   rule: OcrCustomRule,
   detectedScreen: ParseResult["screenType"],
@@ -367,26 +355,107 @@ const templates: Template[] = [
   }
 ];
 
-function detectScreenType(text: string): ScreenType | "unknown" {
-  if (includesAny(text, ["余额宝", "余颧宝", "借呗", "花呗", "储蓄1养老", "家庭保障", "余利宝"])) {
-    return "alipay_wealth";
+/** 原「快捷分支」里出现过、且有助于招行页识别的补充词（已去重合并进各内置类型的计分词表） */
+const BUILTIN_SCORING_EXTRA_KEYWORDS: Partial<Record<Template["type"], string[]>> = {
+  alipay_wealth: ["余利宝"],
+  cmb_property: ["活钱", "朝朝宝", "朝朝盈", "专项"],
+  wechat_wallet: ["微信零钱", "微信钱包"]
+};
+
+/** 各内置页用于与自定义模块竞标的词表（与 templates 中 keywords 合并去重） */
+const BUILTIN_SCORING_SPECS: Array<{ type: Template["type"]; keywords: string[] }> = templates.map((tpl) => {
+  const extra = BUILTIN_SCORING_EXTRA_KEYWORDS[tpl.type] ?? [];
+  const merged = [...tpl.keywords, ...extra];
+  return { type: tpl.type, keywords: [...new Set(merged)] };
+});
+
+function countBuiltinKeywordHits(compactText: string, keywords: string[]): number {
+  return keywords.filter((k) => k.length > 0 && compactText.includes(k)).length;
+}
+
+/** 自定义模块得分 = 该模块配置的关键词在 OCR 中命中条数（多词同时命中则更强） */
+function countCustomModuleKeywordHits(compactOcr: string, mod: CustomRecognitionModule): number {
+  const kws = mod.keywords.map((k) => compactForMatch(k.trim())).filter(Boolean);
+  if (!kws.length) {
+    return 0;
   }
-  if (includesAny(text, ["活钱", "朝朝宝", "朝朝盈", "专项", "招商银行"])) {
-    return "cmb_property";
+  return kws.filter((k) => compactOcr.includes(k)).length;
+}
+
+/**
+ * 页面类型：内置模板与自定义识别模块按「关键词命中条数」同台竞争，分高者胜。
+ * 平局时优先内置模板：否则 `screenType` 会落在 `unknown` 且不会跑财产页/理财页等模板，活钱、黄金等仅模板能抽的行会丢失，且数据会进 `cm-*` 分桶导致招行内置折线读不到。
+ */
+function resolveScreenByKeywordCompetition(
+  compactText: string,
+  customRecognitionModules: CustomRecognitionModule[]
+): {
+  screenType: ScreenType | "unknown";
+  customModuleDisplayLabels: string[];
+  customModuleIds: string[];
+} {
+  let bestBuiltin: { type: Template["type"]; score: number } | null = null;
+  for (const spec of BUILTIN_SCORING_SPECS) {
+    const s = countBuiltinKeywordHits(compactText, spec.keywords);
+    if (s === 0) {
+      continue;
+    }
+    if (!bestBuiltin || s > bestBuiltin.score) {
+      bestBuiltin = { type: spec.type, score: s };
+    }
   }
-  if (includesAny(text, ["零钱通", "微信零钱", "微信钱包", "服务"])) {
-    return "wechat_wallet";
+
+  let bestCustom: { score: number; labels: string[]; ids: string[] } | null = null;
+  for (const mod of customRecognitionModules) {
+    const s = countCustomModuleKeywordHits(compactText, mod);
+    if (s === 0) {
+      continue;
+    }
+    if (!bestCustom || s > bestCustom.score) {
+      bestCustom = { score: s, labels: [mod.displayName], ids: [mod.id] };
+    } else if (bestCustom && s === bestCustom.score) {
+      if (!bestCustom.ids.includes(mod.id)) {
+        bestCustom.labels.push(mod.displayName);
+        bestCustom.ids.push(mod.id);
+      }
+    }
   }
-  const scored = templates
-    .map((tpl) => ({
-      type: tpl.type,
-      score: tpl.keywords.filter((k) => text.includes(k)).length
-    }))
-    .sort((a, b) => b.score - a.score);
-  if (!scored.length || scored[0].score < 2) {
-    return "unknown";
+
+  const bScore = bestBuiltin?.score ?? 0;
+  const cScore = bestCustom?.score ?? 0;
+
+  if (bScore === 0 && cScore === 0) {
+    return { screenType: "unknown", customModuleDisplayLabels: [], customModuleIds: [] };
   }
-  return scored[0].type;
+  if (cScore === 0 && bestBuiltin) {
+    return { screenType: bestBuiltin.type, customModuleDisplayLabels: [], customModuleIds: [] };
+  }
+  if (bScore === 0 && bestCustom) {
+    return {
+      screenType: "unknown",
+      customModuleDisplayLabels: [...bestCustom.labels],
+      customModuleIds: [...bestCustom.ids]
+    };
+  }
+  if (cScore > bScore) {
+    return {
+      screenType: "unknown",
+      customModuleDisplayLabels: [...bestCustom!.labels],
+      customModuleIds: [...bestCustom!.ids]
+    };
+  }
+  if (bScore > cScore && bestBuiltin) {
+    return { screenType: bestBuiltin.type, customModuleDisplayLabels: [], customModuleIds: [] };
+  }
+  /** 同分且两边都有命中：用内置页跑模板，避免财产页活钱/黄金等仅模板规则的行丢失 */
+  if (bScore === cScore && bestBuiltin && bestCustom && bScore > 0) {
+    return { screenType: bestBuiltin.type, customModuleDisplayLabels: [], customModuleIds: [] };
+  }
+  return {
+    screenType: "unknown",
+    customModuleDisplayLabels: [...bestCustom!.labels],
+    customModuleIds: [...bestCustom!.ids]
+  };
 }
 
 function parseReportedTotal(lines: string[]): number | undefined {
@@ -434,11 +503,13 @@ export function parseOcrText(
 ): ParseResult {
   const compactText = raw.replace(/\s+/g, "");
   const lines = toLines(raw);
-  const screenType = detectScreenType(compactText);
+  const { screenType, customModuleDisplayLabels, customModuleIds } = resolveScreenByKeywordCompetition(
+    compactText,
+    customRecognitionModules
+  );
   const customAssets = parseCustomRules(raw, customRules, screenType, customRecognitionModules);
-  const matchedModuleLabels = matchingCustomModuleDisplayLabels(compactText, customRecognitionModules);
-  const screenDisplayLabelForUnknown =
-    screenType === "unknown" && matchedModuleLabels.length > 0 ? matchedModuleLabels.join("、") : undefined;
+  const screenDisplayLabelFromModules =
+    customModuleDisplayLabels.length > 0 ? customModuleDisplayLabels.join("、") : undefined;
 
   if (screenType === "unknown") {
     const warnings: string[] = [];
@@ -447,7 +518,8 @@ export function parseOcrText(
     }
     return {
       screenType,
-      ...(screenDisplayLabelForUnknown ? { screenDisplayLabel: screenDisplayLabelForUnknown } : {}),
+      ...(screenDisplayLabelFromModules ? { screenDisplayLabel: screenDisplayLabelFromModules } : {}),
+      ...(customModuleIds.length ? { customModuleIds } : {}),
       assets: customAssets,
       reportedTotal: parseReportedTotal(lines),
       warnings
@@ -465,8 +537,9 @@ export function parseOcrText(
 
   return {
     screenType,
-    assets,
+    ...(customModuleIds.length ? { customModuleIds } : {}),
     reportedTotal: parseReportedTotal(lines),
+    assets,
     warnings
   };
 }

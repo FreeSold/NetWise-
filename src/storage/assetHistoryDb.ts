@@ -1,5 +1,5 @@
 import * as FileSystem from "expo-file-system";
-import type { AssetClass, ParsedAsset, ScreenType } from "../domain/types";
+import type { AssetClass, ParseResult, ParsedAsset, ScreenType } from "../domain/types";
 import { decryptJson, encryptJson, getEncryptionKey } from "../security/appSecurity";
 
 export type TrendFilter = "all" | AssetClass;
@@ -36,11 +36,20 @@ export type DailySummary = {
   byClass: Record<AssetClass, number>;
 };
 
+/** 单次导入内按「内置页面类型 screenType」或「自定义识别模块 id」分组的资产列表 */
+export type SnapshotAssetBucket = {
+  bucketId: string;
+  assets: ParsedAsset[];
+};
+
 type SnapshotRecord = {
   id: number;
   importDate: string;
   imageHashes: string[];
+  /** 各桶资产展开后的扁平列表，与 assetBuckets 一致；旧数据仅此项 */
   assets: ParsedAsset[];
+  /** 新快照：与 assets 同步，按页面类型 / 模块 id 分桶 */
+  assetBuckets?: SnapshotAssetBucket[];
   /** 与 imageHashes 同序的 OCR 全文，用于自定义识别模块匹配；旧数据无此字段 */
   ocrTexts?: string[];
   /** 测试数据折线快照，可通过 clearSeedTestData / clearAllImportHistory 清除 */
@@ -96,9 +105,12 @@ function keywordsAnyMatchInCompactOcr(compactOcr: string, compactKeywords: strin
   return compactKeywords.some((k) => k.length > 0 && compactOcr.includes(k));
 }
 
+/**
+ * 写入一次导入快照。`assetBuckets` 为按页面类型或自定义模块 id 分组的资产；持久化时同时写入扁平 `assets`（与各桶展开一致）。
+ */
 export async function saveImportSnapshot(
   imageHashes: string[],
-  assets: ParsedAsset[],
+  assetBuckets: SnapshotAssetBucket[],
   ocrTexts?: string[]
 ): Promise<SaveResult> {
   const date = getTodayDate();
@@ -107,6 +119,7 @@ export async function saveImportSnapshot(
     return { saved: false, date };
   }
 
+  const assets = assetBuckets.flatMap((b) => b.assets);
   const store = await readStore();
   const existingSet = new Set(
     store.snapshots
@@ -130,11 +143,24 @@ export async function saveImportSnapshot(
     importDate: date,
     imageHashes: newHashes,
     assets,
+    assetBuckets: assetBuckets.map((b) => ({ bucketId: b.bucketId, assets: [...b.assets] })),
     ...(ocrForNew ? { ocrTexts: ocrForNew } : {})
   });
   await writeStore(store);
 
   return { saved: true, date };
+}
+
+/** 由单次 OCR 解析结果得到该图对应快照分桶 id（内置为 screenType；未识别且命中自定义模块时为模块 id） */
+export function resolveSnapshotBucketIdFromParseResult(pr: ParseResult): string {
+  if (pr.screenType !== "unknown") {
+    return pr.screenType;
+  }
+  const first = pr.customModuleIds?.[0];
+  if (first) {
+    return first;
+  }
+  return "unknown";
 }
 
 function buildMainTrendSeriesFromSnapshots(
@@ -216,19 +242,12 @@ export async function queryPlatformTrendSeriesFull(
   platform: PlatformTrendFilter,
   filter: TrendFilter = "all"
 ): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
-  const snapshots = await readAllSnapshots();
+  const store = await readStore();
+  const snapshots = store.snapshots;
   if (filter !== "all") {
     const totalsByDate = new Map<string, number>();
     for (const snapshot of snapshots) {
-      const platformAssets = snapshot.assets.filter((asset) => {
-        if (!belongsToPlatform(asset.source, platform)) {
-          return false;
-        }
-        if (asset.assetClass !== filter) {
-          return false;
-        }
-        return true;
-      });
+      const platformAssets = collectPlatformAssetsFromSnapshot(snapshot, platform).filter((asset) => asset.assetClass === filter);
       if (!platformAssets.length) {
         continue;
       }
@@ -236,7 +255,10 @@ export async function queryPlatformTrendSeriesFull(
         (sum, asset) => sum + (Number.isFinite(asset.amount) ? asset.amount : 0),
         0
       );
-      totalsByDate.set(snapshot.date, roundMoney((totalsByDate.get(snapshot.date) ?? 0) + snapshotTotal));
+      totalsByDate.set(
+        snapshot.importDate,
+        roundMoney((totalsByDate.get(snapshot.importDate) ?? 0) + snapshotTotal)
+      );
     }
     const primary = [...totalsByDate.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
@@ -246,11 +268,11 @@ export async function queryPlatformTrendSeriesFull(
 
   const byDateClass = new Map<string, Record<AssetClass, number>>();
   for (const snapshot of snapshots) {
-    const platformAssets = snapshot.assets.filter((asset) => belongsToPlatform(asset.source, platform));
+    const platformAssets = collectPlatformAssetsFromSnapshot(snapshot, platform);
     if (!platformAssets.length) {
       continue;
     }
-    const date = snapshot.date;
+    const date = snapshot.importDate;
     let row = byDateClass.get(date);
     if (!row) {
       row = emptyByClassTotals();
@@ -287,13 +309,18 @@ export async function queryPlatformTrendSeries(
   return (await queryPlatformTrendSeriesFull(platform, filter)).primary;
 }
 
-/** 自定义识别模块趋势：OCR 命中模块关键词时计入；若同图还被内置模板解析出资产，只累加自定义规则产出的 `source===custom` 部分，避免误判内置页时模块整条为空。 */
+/**
+ * 自定义识别模块趋势。
+ * 新快照：仅汇总 `assetBuckets` 中 `bucketId === moduleId` 的资产（与导入时分桶一致）。
+ * 旧数据：仍按 OCR 关键词 + 内置/自定义行规则推断（`moduleId` 可省略时仅走旧逻辑，需有关键词）。
+ */
 export async function queryCustomRecognitionTrendSeriesFull(
   keywords: string[],
-  filter: TrendFilter = "all"
+  filter: TrendFilter = "all",
+  moduleId?: string
 ): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
   const compactKws = keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
-  if (!compactKws.length) {
+  if (!moduleId && !compactKws.length) {
     return { primary: [] };
   }
 
@@ -302,16 +329,10 @@ export async function queryCustomRecognitionTrendSeriesFull(
   if (filter !== "all") {
     const totalsByDate = new Map<string, number>();
     for (const snapshot of store.snapshots) {
-      if (!snapshot.assets.length) {
+      const byPart = snapshotCustomModuleByClass(snapshot, moduleId, compactKws);
+      if (!byPart) {
         continue;
       }
-      if (!snapshotOcrMatchesCustomModuleKeywords(snapshot, compactKws)) {
-        continue;
-      }
-      if (snapshotHasBuiltInTemplateAssets(snapshot) && !snapshot.assets.some((a) => a.source === "custom")) {
-        continue;
-      }
-      const byPart = sumAssetsForCustomModuleContribution(snapshot);
       const snapshotTotal = roundMoney(byPart[filter]);
       if (snapshotTotal > 0) {
         totalsByDate.set(
@@ -328,16 +349,10 @@ export async function queryCustomRecognitionTrendSeriesFull(
 
   const byDateClass = new Map<string, Record<AssetClass, number>>();
   for (const snapshot of store.snapshots) {
-    if (!snapshot.assets.length) {
+    const byPart = snapshotCustomModuleByClass(snapshot, moduleId, compactKws);
+    if (!byPart) {
       continue;
     }
-    if (!snapshotOcrMatchesCustomModuleKeywords(snapshot, compactKws)) {
-      continue;
-    }
-    if (snapshotHasBuiltInTemplateAssets(snapshot) && !snapshot.assets.some((a) => a.source === "custom")) {
-      continue;
-    }
-    const byPart = sumAssetsForCustomModuleContribution(snapshot);
     const date = snapshot.importDate;
     let row = byDateClass.get(date);
     if (!row) {
@@ -369,9 +384,10 @@ export async function queryCustomRecognitionTrendSeriesFull(
 
 export async function queryCustomRecognitionTrendSeries(
   keywords: string[],
-  filter: TrendFilter = "all"
+  filter: TrendFilter = "all",
+  moduleId?: string
 ): Promise<TrendPoint[]> {
-  return (await queryCustomRecognitionTrendSeriesFull(keywords, filter)).primary;
+  return (await queryCustomRecognitionTrendSeriesFull(keywords, filter, moduleId)).primary;
 }
 
 /** 仅汇总「指定自然日」内确认保存的快照（历史行为，首页已不再使用）。 */
@@ -426,19 +442,23 @@ function mergeByClassTotals(target: Record<AssetClass, number>, part: Record<Ass
 }
 
 function findLatestPlatformSnapshotInList(snapshots: SnapshotRecord[], platform: PlatformTrendFilter): SnapshotRecord | null {
-  const candidates = snapshots.filter(
-    (snap) => snap.assets.length && snap.assets.some((asset) => belongsToPlatform(asset.source, platform))
-  );
+  const candidates = snapshots.filter((snap) => collectPlatformAssetsFromSnapshot(snap, platform).length > 0);
   return pickLatestSnapshot(candidates);
 }
 
-function findLatestCustomModuleSnapshotInList(snapshots: SnapshotRecord[], keywords: string[]): SnapshotRecord | null {
-  const compactKws = keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
-  if (!compactKws.length) {
-    return null;
-  }
+function findLatestCustomModuleSnapshotInList(
+  snapshots: SnapshotRecord[],
+  mod: { id: string; keywords: string[] }
+): SnapshotRecord | null {
+  const compactKws = mod.keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
   const candidates = snapshots.filter((snap) => {
+    if (snap.assetBuckets?.length) {
+      return snap.assetBuckets.some((b) => b.bucketId === mod.id && b.assets.length > 0);
+    }
     if (!snap.assets.length) {
+      return false;
+    }
+    if (!compactKws.length) {
       return false;
     }
     if (!snapshotOcrMatchesCustomModuleKeywords(snap, compactKws)) {
@@ -466,16 +486,16 @@ function combinedSummaryFromSnapshotList(
     if (!snap) {
       continue;
     }
-    const part = sumAssetsByClass(snap.assets, (a) => belongsToPlatform(a.source, platform));
+    const part = sumAssetsByClass(collectPlatformAssetsFromSnapshot(snap, platform));
     mergeByClassTotals(byClass, part);
   }
 
   for (const mod of customModules) {
-    const snap = findLatestCustomModuleSnapshotInList(snapshots, mod.keywords);
+    const snap = findLatestCustomModuleSnapshotInList(snapshots, mod);
     if (!snap) {
       continue;
     }
-    mergeByClassTotals(byClass, sumAssetsForCustomModuleContribution(snap));
+    mergeByClassTotals(byClass, sumAssetsForCustomModuleContribution(snap, mod));
   }
 
   const total =
@@ -488,7 +508,7 @@ function combinedSummaryFromSnapshotList(
 /**
  * 首页「目前为止总资产」：从持久化快照列表按规则合并（与主资金折线图数据源相同，非由折线反算）。
  * 支付宝 / 招行 / 微信各自取「含有该平台资产的最近一次导入」中该平台资产之和；
- * 每个自定义识别模块取 OCR 命中关键词的最近一次导入：纯自定义来源快照计全额，与内置模板混排时仅计 `source===custom`（与模块折线图口径一致）；再按资产类别合并。
+ * 每个自定义识别模块：新数据取该模块 id 对应分桶的最近一次导入全额；旧数据仍按 OCR 关键词与内置/自定义行规则；再按资产类别合并。
  */
 export async function queryCombinedLatestSummary(
   customModules: { id: string; keywords: string[] }[]
@@ -549,14 +569,18 @@ export async function seedDefaultModuleTestData(): Promise<{ snapshotsWritten: n
     const amount = j * SEED_TEST_STEP;
     const id = nextId;
     nextId += 1;
+    const alipayA = buildSeedTestAsset("测试·支付宝", "alipay_wealth", amount);
+    const cmbA = buildSeedTestAsset("测试·招商银行", "cmb_property", amount);
+    const wxA = buildSeedTestAsset("测试·微信", "wechat_wallet", amount);
     store.snapshots.push({
       id,
       importDate,
       imageHashes: [`seed-netwise-default-mod-${id}`],
-      assets: [
-        buildSeedTestAsset("测试·支付宝", "alipay_wealth", amount),
-        buildSeedTestAsset("测试·招商银行", "cmb_property", amount),
-        buildSeedTestAsset("测试·微信", "wechat_wallet", amount)
+      assets: [alipayA, cmbA, wxA],
+      assetBuckets: [
+        { bucketId: "alipay_wealth", assets: [alipayA] },
+        { bucketId: "cmb_property", assets: [cmbA] },
+        { bucketId: "wechat_wallet", assets: [wxA] }
       ],
       seedTest: true
     });
@@ -602,15 +626,27 @@ export async function ensureDevClientSeedTestDataOnce(): Promise<boolean> {
   return true;
 }
 
-async function readAllSnapshots(): Promise<Array<{ date: string; assets: ParsedAsset[] }>> {
+/** 调试：读取并序列化已持久化的快照（OCR 单条过长时截断，避免界面卡顿） */
+export async function exportPersistedSnapshotsJsonForDebug(truncateOcrAt = 500): Promise<string> {
   const store = await readStore();
-  const snapshots: Array<{ date: string; assets: ParsedAsset[] }> = [];
-  for (const snapshot of store.snapshots) {
-    if (snapshot.assets.length) {
-      snapshots.push({ date: snapshot.importDate, assets: snapshot.assets });
-    }
-  }
-  return snapshots;
+  const snapshots = store.snapshots.map((s) => ({
+    id: s.id,
+    importDate: s.importDate,
+    imageHashes: s.imageHashes,
+    assets: s.assets,
+    assetBuckets: s.assetBuckets,
+    seedTest: s.seedTest,
+    ocrTexts: s.ocrTexts?.map((t) =>
+      typeof t === "string" && t.length > truncateOcrAt
+        ? `${t.slice(0, truncateOcrAt)}…[截断 全文${t.length}字]`
+        : t
+    )
+  }));
+  return JSON.stringify(
+    { exportedAt: new Date().toISOString(), snapshotCount: snapshots.length, snapshots },
+    null,
+    2
+  );
 }
 
 async function readStore(): Promise<StorePayload> {
@@ -666,14 +702,57 @@ function snapshotOcrMatchesCustomModuleKeywords(snapshot: SnapshotRecord, compac
   return keywordsAnyMatchInCompactOcr(compact, compactKws);
 }
 
-/**
- * 自定义识别模块在合并汇总 / 趋势中的金额：无内置资产时整张快照归属该次导入；有内置资产时只取自定义规则行，避免与平台拆解重复。
- */
-function sumAssetsForCustomModuleContribution(snapshot: SnapshotRecord): Record<AssetClass, number> {
+/** 旧快照（无 assetBuckets）：自定义模块在合并汇总中的金额规则 */
+function legacyFlatCustomModuleContribution(snapshot: SnapshotRecord): Record<AssetClass, number> {
   if (snapshotHasBuiltInTemplateAssets(snapshot)) {
     return sumAssetsByClass(snapshot.assets, (a) => a.source === "custom");
   }
   return sumAssetsByClass(snapshot.assets);
+}
+
+/**
+ * 某快照对指定自定义模块的资产类合计：有分桶时只读 `bucketId === mod.id`；否则走旧 OCR+行来源规则。
+ */
+function sumAssetsForCustomModuleContribution(
+  snapshot: SnapshotRecord,
+  mod: { id: string; keywords: string[] }
+): Record<AssetClass, number> {
+  if (snapshot.assetBuckets?.length) {
+    const bucket = snapshot.assetBuckets.find((b) => b.bucketId === mod.id);
+    if (bucket?.assets.length) {
+      return sumAssetsByClass(bucket.assets);
+    }
+    return emptyByClassTotals();
+  }
+  return legacyFlatCustomModuleContribution(snapshot);
+}
+
+/** 自定义模块趋势 / 分项：返回该快照对该模块的贡献，若不适用则 null */
+function snapshotCustomModuleByClass(
+  snapshot: SnapshotRecord,
+  moduleId: string | undefined,
+  keywordsCompact: string[]
+): Record<AssetClass, number> | null {
+  if (moduleId && snapshot.assetBuckets?.length) {
+    const bucket = snapshot.assetBuckets.find((b) => b.bucketId === moduleId);
+    if (!bucket?.assets.length) {
+      return null;
+    }
+    return sumAssetsByClass(bucket.assets);
+  }
+  if (!snapshot.assets.length) {
+    return null;
+  }
+  if (!keywordsCompact.length) {
+    return null;
+  }
+  if (!snapshotOcrMatchesCustomModuleKeywords(snapshot, keywordsCompact)) {
+    return null;
+  }
+  if (snapshotHasBuiltInTemplateAssets(snapshot) && !snapshot.assets.some((a) => a.source === "custom")) {
+    return null;
+  }
+  return legacyFlatCustomModuleContribution(snapshot);
 }
 
 function belongsToPlatform(source: ScreenType, platform: PlatformTrendFilter): boolean {
@@ -687,4 +766,28 @@ function belongsToPlatform(source: ScreenType, platform: PlatformTrendFilter): b
     return source === "alipay_wealth" || source === "alipay_fund";
   }
   return source === "wechat_wallet";
+}
+
+/** 内置 App 页面对应快照分桶 id（与 resolveSnapshotBucketIdFromParseResult 一致） */
+function platformBuiltinBucketIds(platform: PlatformTrendFilter): readonly string[] {
+  if (platform === "cmb") {
+    return ["cmb_property", "cmb_wealth"];
+  }
+  if (platform === "alipay") {
+    return ["alipay_wealth", "alipay_fund"];
+  }
+  return ["wechat_wallet"];
+}
+
+/**
+ * 某快照计入「支付宝 / 招行 / 微信」平台折线的资产列表。
+ * 新快照：合并该平台下所有内置类型分桶内的行（含 OCR 自定义规则产生的 `source===custom`，与导入页同一桶口径一致）。
+ * 旧快照：仍按 `source` 过滤。
+ */
+function collectPlatformAssetsFromSnapshot(snapshot: SnapshotRecord, platform: PlatformTrendFilter): ParsedAsset[] {
+  if (snapshot.assetBuckets?.length) {
+    const allow = new Set(platformBuiltinBucketIds(platform));
+    return snapshot.assetBuckets.filter((b) => allow.has(b.bucketId)).flatMap((b) => b.assets);
+  }
+  return snapshot.assets.filter((a) => belongsToPlatform(a.source, platform));
 }

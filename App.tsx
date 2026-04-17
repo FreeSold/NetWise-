@@ -1,5 +1,5 @@
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Crypto from "expo-crypto";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
@@ -42,7 +42,10 @@ import {
   queryPlatformTrendSeriesFull,
   queryStoredMainTrendAndHeroSummary,
   type PlatformTrendFilter,
+  exportPersistedSnapshotsJsonForDebug,
+  resolveSnapshotBucketIdFromParseResult,
   saveImportSnapshot,
+  type SnapshotAssetBucket,
   seedDefaultModuleTestData,
   type TrendFilter,
   type TrendPoint,
@@ -169,6 +172,75 @@ type ImportedImageMeta = {
   rawOcrText: string;
 };
 
+function validateEditableImportName(name: string): string | null {
+  if (!name.trim()) {
+    return "请填写金额名称";
+  }
+  return null;
+}
+
+function validateEditableImportAmount(amountInput: string): string | null {
+  const normalized = amountInput.replace(/,/g, "").trim();
+  if (!normalized) {
+    return "请输入金额";
+  }
+  if (!/^-?\d*(\.\d*)?$/.test(normalized) || normalized === "." || normalized === "-" || normalized === "-.") {
+    return "金额格式不正确";
+  }
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount)) {
+    return "金额格式不正确";
+  }
+  return null;
+}
+
+function buildImportSnapshotPayload(
+  editableAssets: EditableAssetItem[],
+  importedImageMetas: ImportedImageMeta[],
+  currentImageHashes: string[]
+): { validationErrors: string[]; assetBuckets: SnapshotAssetBucket[]; ocrTextsForSave: string[] } {
+  const validationErrors: string[] = [];
+  for (const asset of editableAssets) {
+    const amountError = validateEditableImportAmount(asset.amountInput);
+    const nameError = validateEditableImportName(asset.name);
+    if (amountError) {
+      validationErrors.push(`${asset.name.trim() || "未命名"}：${amountError}`);
+    } else if (nameError) {
+      validationErrors.push(`${asset.ruleSummary ?? "某一行"}：${nameError}`);
+    }
+  }
+  const bucketMap = new Map<string, ParsedAsset[]>();
+  for (const row of editableAssets) {
+    const meta = importedImageMetas.find((item) => item.uri === row.imageUri);
+    const bucketId = meta ? resolveSnapshotBucketIdFromParseResult(meta.parseResult) : "unknown";
+    const amount = Number(row.amountInput.replace(/,/g, "").trim());
+    const label = row.name.trim() || row.recognizedLabel || "—";
+    const summary = buildRuleSummary(label, amount, row.assetClass);
+    const item: ParsedAsset = {
+      name: row.name.trim(),
+      amount,
+      currency: "CNY",
+      assetClass: row.assetClass,
+      source: row.source,
+      confidence: row.confidence,
+      ruleSummary: summary
+    };
+    if (row.recognizedLabel) {
+      item.recognizedLabel = row.recognizedLabel;
+    }
+    const list = bucketMap.get(bucketId) ?? [];
+    list.push(item);
+    bucketMap.set(bucketId, list);
+  }
+  const assetBuckets: SnapshotAssetBucket[] = [...bucketMap.entries()].map(([bucketId, assets]) => ({
+    bucketId,
+    assets
+  }));
+  const hashToOcr = new Map(importedImageMetas.map((item) => [item.hash, item.rawOcrText]));
+  const ocrTextsForSave = currentImageHashes.map((h) => hashToOcr.get(h) ?? "");
+  return { validationErrors, assetBuckets, ocrTextsForSave };
+}
+
 function inferMimeFromUri(uri: string): "image/png" | "image/jpeg" | "image/webp" {
   const lower = uri.toLowerCase();
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
@@ -196,6 +268,8 @@ export default function App() {
   const [clearMode, setClearMode] = useState<"today" | "all" | null>(null);
   const [clearAllStep2, setClearAllStep2] = useState(false);
   const [seedTestBusy, setSeedTestBusy] = useState(false);
+  /** 由设置「测试数据」开关：控制首页折线 JSON、导入预览、已存快照等调试块 */
+  const [debugJsonDumpsVisible, setDebugJsonDumpsVisible] = useState(false);
   const [moduleHintPopover, setModuleHintPopover] = useState<{ title: string; body: string } | null>(null);
   const [dbReady, setDbReady] = useState(false);
   const [dbInitError, setDbInitError] = useState<string | null>(null);
@@ -267,6 +341,8 @@ export default function App() {
   const [editCmKeywordsText, setEditCmKeywordsText] = useState("");
   const [editCmError, setEditCmError] = useState<string | null>(null);
   const [editCmSaving, setEditCmSaving] = useState(false);
+  const [persistedSnapshotsDebugText, setPersistedSnapshotsDebugText] = useState("");
+  const [persistedSnapshotsDebugBusy, setPersistedSnapshotsDebugBusy] = useState(false);
 
   const cashAmount = dailySummary.byClass.cash;
   const fundAmount = dailySummary.byClass.fund;
@@ -349,9 +425,139 @@ export default function App() {
       </View>
     );
   }
+
+  /** 固定高度 + 内层 ScrollView，避免嵌在外层 ScrollView 里时只读 TextInput 无法纵向滚动 */
+  function renderDebugJsonScroll(text: string, variant: "default" | "tall" = "default") {
+    return (
+      <ScrollView
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+        style={variant === "tall" ? [styles.debugDumpScrollBox, styles.debugDumpScrollBoxTall] : styles.debugDumpScrollBox}
+        contentContainerStyle={styles.debugDumpScrollContent}
+      >
+        <Text style={styles.debugDumpMonoText} selectable>
+          {text}
+        </Text>
+      </ScrollView>
+    );
+  }
+
   const visibleCustomRecognitionModules = customRecognitionModules.filter((m) => !hiddenCustomModuleIds.includes(m.id));
   const hiddenCustomRecognitionModules = customRecognitionModules.filter((m) => hiddenCustomModuleIds.includes(m.id));
   const currentImageHashes = importedImageMetas.map((item) => item.hash);
+
+  const compileImportSnapshotPayload = useCallback(
+    () => buildImportSnapshotPayload(editableAssets, importedImageMetas, currentImageHashes),
+    [editableAssets, importedImageMetas, currentImageHashes]
+  );
+
+  const pendingSaveDebugText = useMemo(() => {
+    if (!editableAssets.length) {
+      return "（暂无解析行：导入并识别后，此处展示将写入库的 JSON 预览）";
+    }
+    try {
+      const { validationErrors, assetBuckets, ocrTextsForSave } = compileImportSnapshotPayload();
+      const bucketTotals: Record<string, number> = {};
+      for (const b of assetBuckets) {
+        const sum = b.assets.reduce((s, a) => s + (Number.isFinite(a.amount) ? a.amount : 0), 0);
+        bucketTotals[b.bucketId] = Math.round(sum * 100) / 100;
+      }
+      const grandTotalAllBuckets = Math.round(Object.values(bucketTotals).reduce((s, v) => s + v, 0) * 100) / 100;
+      return JSON.stringify(
+        {
+          validationErrors,
+          imageHashes: currentImageHashes,
+          assetBuckets,
+          bucketTotals,
+          grandTotalAllBuckets,
+          ocrTextLengths: ocrTextsForSave.map((t) => t.length),
+          ocrTextPreview: ocrTextsForSave.map((t) =>
+            t.length > 400 ? `${t.slice(0, 400)}…(全文${t.length}字)` : t
+          )
+        },
+        null,
+        2
+      );
+    } catch (e) {
+      return `预览生成失败：${e instanceof Error ? e.message : String(e)}`;
+    }
+  }, [compileImportSnapshotPayload]);
+
+  const trendChartsStructureDebugText = useMemo(() => {
+    try {
+      return {
+        trendMain: JSON.stringify(
+          {
+            filter: trendFiltersByModule["trend-main"] ?? "all",
+            points: trendPoints,
+            breakdownByClass: mainTrendBreakdown ?? null
+          },
+          null,
+          2
+        ),
+        platformAlipay: JSON.stringify(
+          {
+            filter: trendFiltersByModule["platform-alipay"] ?? "all",
+            points: platformTrendPoints.alipay,
+            breakdownByClass: platformTrendBreakdown.alipay ?? null
+          },
+          null,
+          2
+        ),
+        platformCmb: JSON.stringify(
+          {
+            filter: trendFiltersByModule["platform-cmb"] ?? "all",
+            points: platformTrendPoints.cmb,
+            breakdownByClass: platformTrendBreakdown.cmb ?? null
+          },
+          null,
+          2
+        ),
+        platformWechat: JSON.stringify(
+          {
+            filter: trendFiltersByModule["platform-wechat"] ?? "all",
+            points: platformTrendPoints.wechat,
+            breakdownByClass: platformTrendBreakdown.wechat ?? null
+          },
+          null,
+          2
+        ),
+        customModules: Object.fromEntries(
+          customRecognitionModules.map((m) => [
+            m.id,
+            JSON.stringify(
+              {
+                displayName: m.displayName,
+                filter: trendFiltersByModule[`cm-${m.id}`] ?? "all",
+                points: customModuleTrendPoints[m.id] ?? [],
+                breakdownByClass: customModuleTrendBreakdown[m.id] ?? null
+              },
+              null,
+              2
+            )
+          ])
+        ) as Record<string, string>
+      };
+    } catch (e) {
+      const msg = `序列化失败：${e instanceof Error ? e.message : String(e)}`;
+      return {
+        trendMain: msg,
+        platformAlipay: msg,
+        platformCmb: msg,
+        platformWechat: msg,
+        customModules: {}
+      };
+    }
+  }, [
+    trendFiltersByModule,
+    trendPoints,
+    mainTrendBreakdown,
+    platformTrendPoints,
+    platformTrendBreakdown,
+    customModuleTrendPoints,
+    customModuleTrendBreakdown,
+    customRecognitionModules
+  ]);
 
   useEffect(() => {
     async function setupSecurity() {
@@ -518,7 +724,7 @@ export default function App() {
         const br: Record<string, TrendSeriesBreakdown[] | undefined> = {};
         await Promise.all(
           modules.map(async (m) => {
-            const r = await queryCustomRecognitionTrendSeriesFull(m.keywords, tf[`cm-${m.id}`] ?? "all");
+            const r = await queryCustomRecognitionTrendSeriesFull(m.keywords, tf[`cm-${m.id}`] ?? "all", m.id);
             pts[m.id] = r.primary;
             br[m.id] = r.breakdown?.length ? r.breakdown : undefined;
           })
@@ -543,6 +749,22 @@ export default function App() {
     setCustomModuleTrendBreakdown(customBundles.br);
   }
 
+  async function refreshPersistedSnapshotsDebug() {
+    if (!dbReady) {
+      setPersistedSnapshotsDebugText("数据库未就绪。");
+      return;
+    }
+    setPersistedSnapshotsDebugBusy(true);
+    try {
+      const json = await exportPersistedSnapshotsJsonForDebug(500);
+      setPersistedSnapshotsDebugText(json);
+    } catch (e) {
+      setPersistedSnapshotsDebugText(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPersistedSnapshotsDebugBusy(false);
+    }
+  }
+
   function updateAssetName(localId: string, name: string) {
     setEditableAssets((prev) =>
       prev.map((a) => {
@@ -560,25 +782,11 @@ export default function App() {
   }
 
   function getNameValidationMessage(name: string): string | null {
-    if (!name.trim()) {
-      return "请填写金额名称";
-    }
-    return null;
+    return validateEditableImportName(name);
   }
 
   function getAmountValidationMessage(amountInput: string): string | null {
-    const normalized = amountInput.replace(/,/g, "").trim();
-    if (!normalized) {
-      return "请输入金额";
-    }
-    if (!/^-?\d*(\.\d*)?$/.test(normalized) || normalized === "." || normalized === "-" || normalized === "-.") {
-      return "金额格式不正确";
-    }
-    const amount = Number(normalized);
-    if (!Number.isFinite(amount)) {
-      return "金额格式不正确";
-    }
-    return null;
+    return validateEditableImportAmount(amountInput);
   }
 
   function updateAssetAmount(localId: string, amountRaw: string) {
@@ -1203,16 +1411,7 @@ export default function App() {
     setSaveLoading(true);
     setSaveNotice("正在记录数据...");
     try {
-      const validationErrors: string[] = [];
-      for (const asset of editableAssets) {
-        const amountError = getAmountValidationMessage(asset.amountInput);
-        const nameError = getNameValidationMessage(asset.name);
-        if (amountError) {
-          validationErrors.push(`${asset.name.trim() || "未命名"}：${amountError}`);
-        } else if (nameError) {
-          validationErrors.push(`${asset.ruleSummary ?? "某一行"}：${nameError}`);
-        }
-      }
+      const { validationErrors, assetBuckets, ocrTextsForSave } = compileImportSnapshotPayload();
       setEditableAssets((prev) =>
         prev.map((asset) => ({
           ...asset,
@@ -1224,27 +1423,7 @@ export default function App() {
         setSaveLoading(false);
         return;
       }
-      const toSave: ParsedAsset[] = editableAssets.map((row) => {
-        const amount = Number(row.amountInput.replace(/,/g, "").trim());
-        const label = row.name.trim() || row.recognizedLabel || "—";
-        const summary = buildRuleSummary(label, amount, row.assetClass);
-        const item: ParsedAsset = {
-          name: row.name.trim(),
-          amount,
-          currency: "CNY",
-          assetClass: row.assetClass,
-          source: row.source,
-          confidence: row.confidence,
-          ruleSummary: summary
-        };
-        if (row.recognizedLabel) {
-          item.recognizedLabel = row.recognizedLabel;
-        }
-        return item;
-      });
-      const hashToOcr = new Map(importedImageMetas.map((item) => [item.hash, item.rawOcrText]));
-      const ocrTextsForSave = currentImageHashes.map((h) => hashToOcr.get(h) ?? "");
-      const result = await saveImportSnapshot(currentImageHashes, toSave, ocrTextsForSave);
+      const result = await saveImportSnapshot(currentImageHashes, assetBuckets, ocrTextsForSave);
       setSaveNotice(result.saved ? `已保存 ${result.date} 的快照记录。` : "同一图片今天已记录，已自动跳过重复保存。");
       await refreshTrendData();
       resetWorkingImport();
@@ -1893,7 +2072,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      <ScrollView contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
+      <ScrollView nestedScrollEnabled contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
         <View style={styles.heroCard}>
           <View style={styles.heroTopRow}>
             <Text style={styles.heroHint}>目前为止总资产(元)</Text>
@@ -1961,6 +2140,12 @@ export default function App() {
             primarySeriesLabel="全部"
             chartTooltipOpacity={moduleControlOpacity}
           />
+          {debugJsonDumpsVisible ? (
+            <>
+              <Text style={styles.debugDumpLabel}>本图折线数据结构（调试）</Text>
+              {renderDebugJsonScroll(trendChartsStructureDebugText.trendMain)}
+            </>
+          ) : null}
         </View>
 
         {visiblePlatformModules.map((platform) => (
@@ -1987,6 +2172,18 @@ export default function App() {
               primarySeriesLabel="全部"
               chartTooltipOpacity={moduleControlOpacity}
             />
+            {debugJsonDumpsVisible ? (
+              <>
+                <Text style={styles.debugDumpLabel}>本图折线数据结构（调试）</Text>
+                {renderDebugJsonScroll(
+                  platform === "alipay"
+                    ? trendChartsStructureDebugText.platformAlipay
+                    : platform === "cmb"
+                      ? trendChartsStructureDebugText.platformCmb
+                      : trendChartsStructureDebugText.platformWechat
+                )}
+              </>
+            ) : null}
           </View>
         ))}
         {visibleCustomRecognitionModules.map((m) => (
@@ -2013,6 +2210,12 @@ export default function App() {
               primarySeriesLabel="全部"
               chartTooltipOpacity={moduleControlOpacity}
             />
+            {debugJsonDumpsVisible ? (
+              <>
+                <Text style={styles.debugDumpLabel}>本图折线数据结构（调试）</Text>
+                {renderDebugJsonScroll(trendChartsStructureDebugText.customModules[m.id] ?? "{}")}
+              </>
+            ) : null}
           </View>
         ))}
       </ScrollView>
@@ -2026,6 +2229,7 @@ export default function App() {
             </Pressable>
           </View>
           <ScrollView
+            nestedScrollEnabled
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.settingsScrollContent}
             showsVerticalScrollIndicator={false}
@@ -2235,6 +2439,26 @@ export default function App() {
               <Text style={styles.securityActionButtonText}>添加规则</Text>
             </Pressable>
           </View>
+          {debugJsonDumpsVisible ? (
+            <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+              <View style={styles.settingsLabelHintRow}>
+                <Text style={styles.settingsLabel}>已存快照（调试用）</Text>
+              </View>
+              <Text style={styles.muted}>从本地加密库读取当前所有快照 JSON，便于对照折线。OCR 正文过长会截断。</Text>
+              <View style={styles.debugDumpToolbar}>
+                <Pressable
+                  style={[styles.securityActionButton, modulePressOpacityStyle(), persistedSnapshotsDebugBusy && { opacity: 0.6 }]}
+                  onPress={() => void refreshPersistedSnapshotsDebug()}
+                  disabled={persistedSnapshotsDebugBusy}
+                >
+                  <Text style={styles.securityActionButtonText}>
+                    {persistedSnapshotsDebugBusy ? "加载中…" : "刷新已存数据"}
+                  </Text>
+                </Pressable>
+              </View>
+              {renderDebugJsonScroll(persistedSnapshotsDebugText || "（点击「刷新已存数据」）", "tall")}
+            </View>
+          ) : null}
           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
             <View style={styles.settingsDataCleanupRow}>
               <View style={styles.settingsDataCleanupTitleCluster}>
@@ -2298,6 +2522,17 @@ export default function App() {
                 </Pressable>
               </View>
             </View>
+            <Text style={styles.seedTestDebugToggleHint}>
+              开启后显示首页各折线图 JSON、导入页写入预览与本页已存快照；关闭后隐藏。
+            </Text>
+            <Pressable
+              style={[styles.securityActionButton, modulePressOpacityStyle(), styles.seedTestDebugToggleButton]}
+              onPress={() => setDebugJsonDumpsVisible((v) => !v)}
+            >
+              <Text style={styles.securityActionButtonText}>
+                {debugJsonDumpsVisible ? "隐藏调试数据" : "显示调试数据"}
+              </Text>
+            </Pressable>
           </View>
           </ScrollView>
         </SafeAreaView>
@@ -2311,7 +2546,7 @@ export default function App() {
               <Text style={styles.settingsClose}>完成</Text>
             </Pressable>
           </View>
-          <ScrollView contentContainerStyle={styles.manageContent}>
+          <ScrollView nestedScrollEnabled contentContainerStyle={styles.manageContent}>
             <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
               <View style={styles.sectionHeaderRow}>
                 <View style={[styles.cardTitleHintRow, styles.cardTitleHintRowGrow]}>
@@ -2488,6 +2723,12 @@ export default function App() {
               <Pressable style={[styles.confirmButton, modulePressOpacityStyle()]} onPress={handleConfirmSnapshot}>
                 <Text style={styles.confirmButtonText}>{saveLoading ? "记录中..." : "确认并记录"}</Text>
               </Pressable>
+              {debugJsonDumpsVisible ? (
+                <>
+                  <Text style={styles.debugDumpLabel}>将写入库的预览（调试用）</Text>
+                  {renderDebugJsonScroll(pendingSaveDebugText)}
+                </>
+              ) : null}
               {saveNotice ? <Text style={styles.muted}>{saveNotice}</Text> : null}
             </View>
           </ScrollView>
@@ -3156,6 +3397,47 @@ const styles = StyleSheet.create({
   confirmButtonText: {
     color: "white",
     fontWeight: "700"
+  },
+  debugDumpLabel: {
+    marginTop: 12,
+    marginBottom: 6,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#1e293b"
+  },
+  debugDumpToolbar: {
+    marginTop: 8,
+    marginBottom: 8
+  },
+  debugDumpScrollBox: {
+    height: 200,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 8,
+    backgroundColor: "#f8fafc"
+  },
+  debugDumpScrollBoxTall: {
+    height: 360
+  },
+  debugDumpScrollContent: {
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 14
+  },
+  debugDumpMonoText: {
+    fontSize: 11,
+    ...(Platform.OS === "ios" ? { fontFamily: "Menlo" } : { fontFamily: "monospace" }),
+    color: "#0f172a"
+  },
+  seedTestDebugToggleHint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: "#64748b",
+    lineHeight: 18
+  },
+  seedTestDebugToggleButton: {
+    marginTop: 10,
+    alignSelf: "stretch"
   },
   trendPickerWrap: {
     flexDirection: "row",

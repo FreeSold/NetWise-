@@ -206,9 +206,8 @@ function formatYTickLabel(n: number): string {
   return r.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 }
 
-const TOOLTIP_LAYOUT_HALF_W = 42;
-/** 气泡 + 三角总高度，使三角尖端落在数据点附近 */
-const TOOLTIP_LAYOUT_ABOVE_DOT = 42;
+/** 首帧估算宽度（量到真实宽度前用于水平居中） */
+const TOOLTIP_WIDTH_FALLBACK = 84;
 
 export function TrendLineChart({
   points,
@@ -217,7 +216,10 @@ export function TrendLineChart({
   primarySeriesLabel = "全部"
 }: Props) {
   const [width, setWidth] = useState(320);
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  /** 当前高亮折线点对应的日期；分项数据变化不应覆盖用户选中的点 */
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [tooltipClusterW, setTooltipClusterW] = useState<number | null>(null);
+  const visibleDotsSelectionKeyRef = useRef<string | null>(null);
   const height = 180;
   const paddingY = 28;
   const rightPad = 24;
@@ -273,7 +275,7 @@ export function TrendLineChart({
     () =>
       PanResponder.create({
         onPanResponderGrant: () => {
-          setActiveIndex(null);
+          setSelectedDate(null);
           dragX.stopAnimation();
           const w0 = windowStartRef.current;
           dragOriginWindowRef.current = w0;
@@ -377,6 +379,7 @@ export function TrendLineChart({
         path: "",
         dots: [] as Array<{ x: number; y: number; total: number; date: string }>,
         dotsSignature: "",
+        visibleDotsInteractionKey: "",
         ticks: [] as number[],
         domainMin: 0,
         domainMax: 1,
@@ -405,6 +408,7 @@ export function TrendLineChart({
         path: "",
         dots: [] as Array<{ x: number; y: number; total: number; date: string }>,
         dotsSignature: "",
+        visibleDotsInteractionKey: "",
         ticks: [] as number[],
         domainMin: 0,
         domainMax: 1,
@@ -525,12 +529,14 @@ export function TrendLineChart({
     const breakdownSig = (breakdownByClass ?? [])
       .map((s) => `${s.assetClass}:${s.points.map((p) => `${p.date}:${p.total}`).join(",")}`)
       .join("|");
-    const dotsSignature = `${dots.map((d) => `${d.date}:${d.total}`).join("|")}#${breakdownSig}`;
+    const visibleDotsInteractionKey = dots.map((d) => `${d.date}:${d.total}`).join("|");
+    const dotsSignature = `${visibleDotsInteractionKey}#${breakdownSig}`;
 
     return {
       path,
       dots,
       dotsSignature,
+      visibleDotsInteractionKey,
       ticks,
       domainMin,
       domainMax,
@@ -548,14 +554,34 @@ export function TrendLineChart({
     };
   }, [points, breakdownByClass, axisFreezeStart, windowStart, height, paddingY, rightPad, width]);
 
-  /** 可见折线点集变化时，默认高亮并展示最右侧点（当前窗内最近一次导入） */
+  /**
+   * 可见窗内主折线点集变化时同步选中日期：
+   * - 分项刷新不改变 key，不重置；
+   * - 同日总额等刷新会改 key，若用户已选某日且该日仍在窗内则保留，避免只能停留在「最新」点；
+   * - 换窗或该日已不可见时再默认选当前窗最右侧点。
+   */
   useLayoutEffect(() => {
     if (!computed.dots.length) {
-      setActiveIndex(null);
+      setSelectedDate(null);
+      visibleDotsSelectionKeyRef.current = null;
       return;
     }
-    setActiveIndex(computed.dots.length - 1);
-  }, [computed.dotsSignature]);
+    const key = computed.visibleDotsInteractionKey;
+    if (visibleDotsSelectionKeyRef.current === key) {
+      return;
+    }
+    visibleDotsSelectionKeyRef.current = key;
+    setSelectedDate((prev) => {
+      if (prev !== null && computed.dots.some((d) => d.date === prev)) {
+        return prev;
+      }
+      return computed.dots[computed.dots.length - 1].date;
+    });
+  }, [computed.visibleDotsInteractionKey]);
+
+  useLayoutEffect(() => {
+    setTooltipClusterW(null);
+  }, [selectedDate]);
 
   const frozenPanScrollInitedRef = useRef(false);
   useLayoutEffect(() => {
@@ -591,6 +617,28 @@ export function TrendLineChart({
     }
   }
 
+  /** 相邻折线点过密时缩小热区，避免 52px 方格 + hitSlop 横向严重重叠 */
+  const dotHitRadius = useMemo(() => {
+    const dots = computed.dots;
+    if (dots.length <= 1) {
+      return 26;
+    }
+    let minSeg = Infinity;
+    for (let i = 1; i < dots.length; i++) {
+      const dx = dots[i].x - dots[i - 1].x;
+      const dy = dots[i].y - dots[i - 1].y;
+      const d = Math.hypot(dx, dy);
+      if (d < minSeg) {
+        minSeg = d;
+      }
+    }
+    if (!Number.isFinite(minSeg) || minSeg <= 4) {
+      return 26;
+    }
+    const raw = Math.floor((minSeg - 2) / 2);
+    return Math.min(26, Math.max(4, raw));
+  }, [computed.dots]);
+
   if (!points.length) {
     return (
       <View style={styles.emptyWrap}>
@@ -599,11 +647,10 @@ export function TrendLineChart({
     );
   }
 
-  const safeActiveIndex =
-    activeIndex === null ? null : Math.max(0, Math.min(activeIndex, computed.dots.length - 1));
+  const selectedIdx =
+    selectedDate === null ? -1 : computed.dots.findIndex((d) => d.date === selectedDate);
+  const safeActiveIndex = selectedIdx >= 0 ? selectedIdx : null;
   const activeDot = safeActiveIndex === null ? null : computed.dots[safeActiveIndex];
-
-  const hitR = 26;
 
   const rangeLabel =
     points.length <= DISPLAY_POINT_CAP
@@ -694,7 +741,7 @@ export function TrendLineChart({
               ))}
             </Svg>
             <View style={styles.panLayer} {...panResponder.panHandlers} accessibilityLabel="横向拖动查看历史数据">
-              <Pressable style={StyleSheet.absoluteFill} onPress={() => setActiveIndex(null)} accessibilityRole="button" />
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedDate(null)} accessibilityRole="button" />
             </View>
             {computed.dots.map((dot, index) => (
               <Pressable
@@ -702,65 +749,17 @@ export function TrendLineChart({
                 style={[
                   styles.dotHit,
                   {
-                    left: dot.x - hitR,
-                    top: dot.y - hitR,
-                    width: hitR * 2,
-                    height: hitR * 2
+                    left: dot.x - dotHitRadius,
+                    top: dot.y - dotHitRadius,
+                    width: dotHitRadius * 2,
+                    height: dotHitRadius * 2
                   }
                 ]}
                 accessibilityHint="点击查看该日金额"
-                hitSlop={4}
-                onPress={() => setActiveIndex(index)}
+                hitSlop={dotHitRadius >= 18 ? 4 : 0}
+                onPress={() => setSelectedDate(computed.dots[index].date)}
               />
             ))}
-            {activeDot ? (
-              <View
-                style={[
-                  styles.tooltipCluster,
-                  {
-                    left: Math.max(
-                      6,
-                      Math.min(activeDot.x - TOOLTIP_LAYOUT_HALF_W, computed.plotW - TOOLTIP_LAYOUT_HALF_W * 2 - 6)
-                    ),
-                    top: Math.max(6, activeDot.y - TOOLTIP_LAYOUT_ABOVE_DOT),
-                    opacity: chartTooltipOpacity
-                  }
-                ]}
-                pointerEvents="none"
-              >
-                <View style={styles.tooltipBubble}>
-                  <Text style={styles.tooltipDate}>{activeDot.date}</Text>
-                  {breakdownByClass?.length ? (
-                    <>
-                      <Text style={styles.tooltipAmountPrimary}>
-                        {primarySeriesLabel} {activeDot.total.toFixed(2)} 元
-                      </Text>
-                      {(breakdownByClass ?? [])
-                        .map((ser) => {
-                          const pt = ser.points.find((p) => p.date === activeDot.date);
-                          const v = pt?.total ?? 0;
-                          return { ser, v };
-                        })
-                        .filter(({ v }) => v > 0)
-                        .map(({ ser, v }) => (
-                          <Text
-                            key={ser.assetClass}
-                            style={[
-                              styles.tooltipBreakdownLine,
-                              { color: BREAKDOWN_LINE_COLORS[ser.assetClass] }
-                            ]}
-                          >
-                            {BREAKDOWN_CLASS_LABEL[ser.assetClass]} {v.toFixed(2)} 元
-                          </Text>
-                        ))}
-                    </>
-                  ) : (
-                    <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
-                  )}
-                </View>
-                <View style={styles.tooltipCaret} />
-              </View>
-            ) : null}
           </Animated.View>
         </View>
 
@@ -848,6 +847,88 @@ export function TrendLineChart({
             </Text>
           ))}
         </View>
+
+        {/* 与折线同 transform，但放在裁剪区外；pointerEvents=none 避免挡下层圆点点击（box-none 在部分机型仍会抢触摸） */}
+        <View
+          style={[
+            styles.tooltipPlotOverlay,
+            {
+              top: paddingY,
+              left: computed.chartLeft,
+              width: computed.plotW,
+              height: computed.plotInnerH
+            }
+          ]}
+          pointerEvents="none"
+        >
+          <Animated.View
+            style={[
+              styles.tooltipScrollSync,
+              {
+                width: computed.bufferScrollW,
+                height: computed.plotInnerH,
+                transform: [{ translateX: dragX }]
+              }
+            ]}
+            pointerEvents="none"
+          >
+            {activeDot ? (
+              <View
+                style={[
+                  styles.tooltipCluster,
+                  {
+                    left:
+                      activeDot.x -
+                      (tooltipClusterW !== null ? tooltipClusterW : TOOLTIP_WIDTH_FALLBACK) / 2,
+                    // 用 bottom 锚定：三角在容器最下方，避免分项多时仍用固定 top 导致尖端偏离折线点
+                    bottom: computed.plotInnerH - activeDot.y,
+                    opacity: chartTooltipOpacity
+                  }
+                ]}
+                pointerEvents="none"
+                onLayout={(e) => {
+                  const w = Math.round(e.nativeEvent.layout.width);
+                  if (w <= 0) {
+                    return;
+                  }
+                  setTooltipClusterW((prev) => (prev === w ? prev : w));
+                }}
+              >
+                <View style={styles.tooltipBubble}>
+                  <Text style={styles.tooltipDate}>{activeDot.date}</Text>
+                  {breakdownByClass?.length ? (
+                    <>
+                      <Text style={styles.tooltipAmountPrimary}>
+                        {primarySeriesLabel} {activeDot.total.toFixed(2)} 元
+                      </Text>
+                      {(breakdownByClass ?? [])
+                        .map((ser) => {
+                          const pt = ser.points.find((p) => p.date === activeDot.date);
+                          const v = pt?.total ?? 0;
+                          return { ser, v };
+                        })
+                        .filter(({ v }) => v > 0)
+                        .map(({ ser, v }) => (
+                          <Text
+                            key={ser.assetClass}
+                            style={[
+                              styles.tooltipBreakdownLine,
+                              { color: BREAKDOWN_LINE_COLORS[ser.assetClass] }
+                            ]}
+                          >
+                            {BREAKDOWN_CLASS_LABEL[ser.assetClass]} {v.toFixed(2)} 元
+                          </Text>
+                        ))}
+                    </>
+                  ) : (
+                    <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
+                  )}
+                </View>
+                <View style={styles.tooltipCaret} />
+              </View>
+            ) : null}
+          </Animated.View>
+        </View>
       </View>
       <Text style={styles.rangeHint}>{rangeLabel}</Text>
     </View>
@@ -864,7 +945,8 @@ const styles = StyleSheet.create({
   chartSurface: {
     position: "relative",
     alignSelf: "center",
-    overflow: "hidden"
+    overflow: "visible",
+    zIndex: 2
   },
   /** 轴线围成的绘图区内：左=Y 轴内侧，右=右内边距，上/下=上下轴线 */
   chartPlotClip: {
@@ -932,6 +1014,19 @@ const styles = StyleSheet.create({
   axisText: {
     color: "#4f76b3",
     fontSize: 12
+  },
+  /** 与 plot 对齐的框仅用于定位，不裁剪子元素 */
+  tooltipPlotOverlay: {
+    position: "absolute",
+    overflow: "visible",
+    zIndex: 15,
+    elevation: 15
+  },
+  /** 与 chartPlotScroll 同宽、同 translateX，保证浮窗与折线点对齐 */
+  tooltipScrollSync: {
+    position: "absolute",
+    left: 0,
+    top: 0
   },
   tooltipCluster: {
     position: "absolute",
@@ -1009,6 +1104,7 @@ const styles = StyleSheet.create({
     color: "#64748b",
     fontSize: 11,
     marginTop: 2,
-    lineHeight: 16
+    lineHeight: 16,
+    zIndex: 0
   }
 });
