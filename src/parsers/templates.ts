@@ -7,7 +7,7 @@ import {
   type ParsedAsset,
   type ScreenType
 } from "../domain/types";
-import { normalizeOcrRuleScreenScope } from "../storage/ocrCustomRulesStore";
+import { normalizeOcrRuleScreenScope } from "../storage/ocrRuleScopeNormalize";
 import { buildRuleSummary, parseMoney, safeAsset } from "./shared";
 
 type Template = {

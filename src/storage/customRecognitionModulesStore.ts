@@ -1,7 +1,11 @@
 import * as FileSystem from "expo-file-system";
 import type { CustomRecognitionModule } from "../domain/types";
+import { backupCorruptDocumentFile, getDocumentFileUri, writeUtf8Atomically } from "./atomicDocumentFileWrite";
 
 const FILE_NAME = "netwise-custom-recognition-modules.json";
+const MODULES_CORRUPT_BACKUP_STEM = "netwise-custom-recognition-modules";
+
+let corruptModulesFileBackupAttempted = false;
 
 type FilePayload = {
   modules: CustomRecognitionModule[];
@@ -9,10 +13,7 @@ type FilePayload = {
 };
 
 function getUri(): string {
-  if (!FileSystem.documentDirectory) {
-    throw new Error("文件存储目录不可用");
-  }
-  return `${FileSystem.documentDirectory}${FILE_NAME}`;
+  return getDocumentFileUri(FILE_NAME);
 }
 
 function isValidModule(x: unknown): x is CustomRecognitionModule {
@@ -30,30 +31,59 @@ export async function loadCustomRecognitionModules(): Promise<FilePayload> {
   const uri = getUri();
   const info = await FileSystem.getInfoAsync(uri);
   if (!info.exists) {
+    corruptModulesFileBackupAttempted = false;
     return { modules: [], hiddenIds: [] };
   }
+  let raw: string;
   try {
-    const raw = await FileSystem.readAsStringAsync(uri);
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return { modules: [], hiddenIds: [] };
+    raw = await FileSystem.readAsStringAsync(uri);
+  } catch (error) {
+    console.error("Failed to read custom recognition modules file", error);
+    if (!corruptModulesFileBackupAttempted) {
+      const bak = await backupCorruptDocumentFile(uri, MODULES_CORRUPT_BACKUP_STEM);
+      corruptModulesFileBackupAttempted = true;
+      if (bak) {
+        console.warn("Backed up unreadable modules file to", bak);
+      }
     }
-    const p = parsed as Record<string, unknown>;
-    const modules = Array.isArray(p.modules) ? p.modules.filter(isValidModule) : [];
-    const hiddenIds = Array.isArray(p.hiddenIds) ? p.hiddenIds.filter((id): id is string => typeof id === "string") : [];
-    return { modules, hiddenIds };
-  } catch {
     return { modules: [], hiddenIds: [] };
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error) {
+    console.error("Failed to parse custom recognition modules JSON", error);
+    if (!corruptModulesFileBackupAttempted) {
+      const bak = await backupCorruptDocumentFile(uri, MODULES_CORRUPT_BACKUP_STEM);
+      corruptModulesFileBackupAttempted = true;
+      if (bak) {
+        console.warn("Backed up corrupt modules file to", bak);
+      }
+    }
+    return { modules: [], hiddenIds: [] };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    console.error("Custom recognition modules file root is not a JSON object");
+    if (!corruptModulesFileBackupAttempted) {
+      const bak = await backupCorruptDocumentFile(uri, MODULES_CORRUPT_BACKUP_STEM);
+      corruptModulesFileBackupAttempted = true;
+      if (bak) {
+        console.warn("Backed up invalid modules file to", bak);
+      }
+    }
+    return { modules: [], hiddenIds: [] };
+  }
+  corruptModulesFileBackupAttempted = false;
+  const p = parsed as Record<string, unknown>;
+  const modules = Array.isArray(p.modules) ? p.modules.filter(isValidModule) : [];
+  const hiddenIds = Array.isArray(p.hiddenIds) ? p.hiddenIds.filter((id): id is string => typeof id === "string") : [];
+  return { modules, hiddenIds };
 }
 
 export async function saveCustomRecognitionModules(payload: FilePayload): Promise<void> {
-  const uri = getUri();
   const body: FilePayload = {
     modules: payload.modules.filter(isValidModule),
     hiddenIds: [...new Set(payload.hiddenIds.filter((id) => typeof id === "string"))]
   };
-  await FileSystem.writeAsStringAsync(uri, JSON.stringify(body, null, 0), {
-    encoding: FileSystem.EncodingType.UTF8
-  });
+  await writeUtf8Atomically(FILE_NAME, JSON.stringify(body, null, 0));
 }

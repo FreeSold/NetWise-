@@ -1,72 +1,75 @@
 import * as FileSystem from "expo-file-system";
-import { OCR_CUSTOM_MODULE_SCOPE_PREFIX, type OcrCustomRule, type OcrRuleScreenScope } from "../domain/types";
+import type { OcrCustomRule, OcrRuleScreenScope } from "../domain/types";
+import { backupCorruptDocumentFile, getDocumentFileUri, writeUtf8Atomically } from "./atomicDocumentFileWrite";
+import { isValidRuleScreenScope, normalizeOcrRuleScreenScope } from "./ocrRuleScopeNormalize";
+
+export { normalizeOcrRuleScreenScope };
 
 const RULES_FILE = "netwise-ocr-custom-rules.json";
+const RULES_CORRUPT_BACKUP_STEM = "netwise-ocr-custom-rules";
 
-/** 旧版按理财/基金、财产/理财拆分的 scope，读入后合并为 alipay / cmb */
-const LEGACY_ALIPAY_SCOPES = new Set(["alipay_wealth", "alipay_fund"]);
-const LEGACY_CMB_SCOPES = new Set(["cmb_property", "cmb_wealth"]);
-
-const VALID_BUILTIN_SCOPES = new Set<string>([
-  "any",
-  "unknown",
-  "alipay",
-  "cmb",
-  "wechat_wallet",
-  ...LEGACY_ALIPAY_SCOPES,
-  ...LEGACY_CMB_SCOPES
-]);
-
-export function normalizeOcrRuleScreenScope(scope: string | undefined): OcrRuleScreenScope | undefined {
-  if (scope === undefined) {
-    return undefined;
-  }
-  if (LEGACY_ALIPAY_SCOPES.has(scope)) {
-    return "alipay";
-  }
-  if (LEGACY_CMB_SCOPES.has(scope)) {
-    return "cmb";
-  }
-  return scope as OcrRuleScreenScope;
-}
-
-function isValidScreenScope(s: string): s is OcrRuleScreenScope {
-  if (VALID_BUILTIN_SCOPES.has(s)) {
-    return true;
-  }
-  return s.startsWith(OCR_CUSTOM_MODULE_SCOPE_PREFIX) && s.length > OCR_CUSTOM_MODULE_SCOPE_PREFIX.length;
-}
+/** 本会话内已对损坏规则文件尝试过备份，避免每次 load 都复制 */
+let corruptRulesFileBackupAttempted = false;
 
 function getRulesUri(): string {
-  if (!FileSystem.documentDirectory) {
-    throw new Error("文件存储目录不可用");
-  }
-  return `${FileSystem.documentDirectory}${RULES_FILE}`;
+  return getDocumentFileUri(RULES_FILE);
 }
 
 export async function loadOcrCustomRules(): Promise<OcrCustomRule[]> {
   const uri = getRulesUri();
   const info = await FileSystem.getInfoAsync(uri);
   if (!info.exists) {
+    corruptRulesFileBackupAttempted = false;
     return [];
   }
+  let raw: string;
   try {
-    const raw = await FileSystem.readAsStringAsync(uri);
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter(isValidRule).map((r) => {
-      const rule = r as OcrCustomRule;
-      const nextScope = normalizeOcrRuleScreenScope(rule.screenScope);
-      if (nextScope === rule.screenScope) {
-        return rule;
+    raw = await FileSystem.readAsStringAsync(uri);
+  } catch (error) {
+    console.error("Failed to read OCR custom rules file", error);
+    if (!corruptRulesFileBackupAttempted) {
+      const bak = await backupCorruptDocumentFile(uri, RULES_CORRUPT_BACKUP_STEM);
+      corruptRulesFileBackupAttempted = true;
+      if (bak) {
+        console.warn("Backed up unreadable OCR rules file to", bak);
       }
-      return { ...rule, screenScope: nextScope };
-    });
-  } catch {
+    }
     return [];
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error) {
+    console.error("Failed to parse OCR custom rules JSON", error);
+    if (!corruptRulesFileBackupAttempted) {
+      const bak = await backupCorruptDocumentFile(uri, RULES_CORRUPT_BACKUP_STEM);
+      corruptRulesFileBackupAttempted = true;
+      if (bak) {
+        console.warn("Backed up corrupt OCR rules file to", bak);
+      }
+    }
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    console.error("OCR custom rules file root is not a JSON array");
+    if (!corruptRulesFileBackupAttempted) {
+      const bak = await backupCorruptDocumentFile(uri, RULES_CORRUPT_BACKUP_STEM);
+      corruptRulesFileBackupAttempted = true;
+      if (bak) {
+        console.warn("Backed up invalid OCR rules file to", bak);
+      }
+    }
+    return [];
+  }
+  corruptRulesFileBackupAttempted = false;
+  return parsed.filter(isValidRule).map((r) => {
+    const rule = r as OcrCustomRule;
+    const nextScope = normalizeOcrRuleScreenScope(rule.screenScope);
+    if (nextScope === rule.screenScope) {
+      return rule;
+    }
+    return { ...rule, screenScope: nextScope };
+  });
 }
 
 function isValidRule(item: unknown): item is OcrCustomRule {
@@ -86,7 +89,7 @@ function isValidRule(item: unknown): item is OcrCustomRule {
     return false;
   }
   if (r.screenScope !== undefined) {
-    if (typeof r.screenScope !== "string" || !isValidScreenScope(r.screenScope)) {
+    if (typeof r.screenScope !== "string" || !isValidRuleScreenScope(r.screenScope)) {
       return false;
     }
   }
@@ -94,8 +97,5 @@ function isValidRule(item: unknown): item is OcrCustomRule {
 }
 
 export async function saveOcrCustomRules(rules: OcrCustomRule[]): Promise<void> {
-  const uri = getRulesUri();
-  await FileSystem.writeAsStringAsync(uri, JSON.stringify(rules, null, 0), {
-    encoding: FileSystem.EncodingType.UTF8
-  });
+  await writeUtf8Atomically(RULES_FILE, JSON.stringify(rules, null, 0));
 }

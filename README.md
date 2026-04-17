@@ -110,10 +110,10 @@ npm run start:clean
 
 ## 数据落库与去重
 
-- **持久化方式**：应用文档目录下单文件 `netwise-asset-history.json`，内容为 **AES 加密后的 JSON**（实现见 `src/storage/assetHistoryDb.ts`）。写入时先落盘 **`netwise-asset-history.json.tmp`** 再移动到正式文件名，降低写入中断导致主文件损坏的概率。`package.json` 中的 `expo-sqlite` 为依赖项，**当前业务快照未使用 SQLite 表存储**。
+- **持久化方式**：应用文档目录下单文件 `netwise-asset-history.json`，内容为 **AES 加密后的 JSON**（实现见 `src/storage/assetHistoryDb.ts`）。写入时先落盘 **`netwise-asset-history.json.tmp`** 再移动到正式文件名，降低写入中断导致主文件损坏的概率。**业务快照未使用 SQLite**，也未将 `expo-sqlite` 列入依赖。
 - **其它本地配置**（明文 JSON，同在文档目录）：
-  - `netwise-ocr-custom-rules.json`：自定义 OCR 规则
-  - `netwise-custom-recognition-modules.json`：自定义识别模块与折线隐藏状态
+  - `netwise-ocr-custom-rules.json`：自定义 OCR 规则（写入先 **`netwise-ocr-custom-rules.json.tmp`** 再移动；读入失败时尽量备份为 **`netwise-ocr-custom-rules.corrupt.*.bak`**，见 `src/storage/ocrCustomRulesStore.ts`）
+  - `netwise-custom-recognition-modules.json`：自定义识别模块与折线隐藏状态（同上：`*.tmp` 原子写入、`*.corrupt.*.bak` 备份策略，见 `src/storage/customRecognitionModulesStore.ts`）
 - 记录时机：用户点击“确认并记录”
 - 去重规则：同一天内，`同一图片 hash` 只记录一次
 - 记录内容（解密后的逻辑结构）：

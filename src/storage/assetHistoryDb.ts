@@ -1,6 +1,7 @@
 import * as FileSystem from "expo-file-system";
 import type { AssetClass, ParseResult, ParsedAsset, ScreenType } from "../domain/types";
 import { decryptJson, encryptJson, getEncryptionKey } from "../security/appSecurity";
+import { filterNewImageHashesForImportDate } from "./importImageHashDedup";
 
 export type TrendFilter = "all" | AssetClass;
 
@@ -42,7 +43,7 @@ export type SnapshotAssetBucket = {
   assets: ParsedAsset[];
 };
 
-type SnapshotRecord = {
+export type SnapshotRecord = {
   id: number;
   importDate: string;
   imageHashes: string[];
@@ -146,12 +147,7 @@ export async function saveImportSnapshot(
 
   const assets = assetBuckets.flatMap((b) => b.assets);
   const store = await readStore();
-  const existingSet = new Set(
-    store.snapshots
-      .filter((snapshot) => snapshot.importDate === date)
-      .flatMap((snapshot) => snapshot.imageHashes)
-  );
-  const newHashes = uniqueHashes.filter((hash) => !existingSet.has(hash));
+  const newHashes = filterNewImageHashesForImportDate(date, uniqueHashes, store.snapshots);
   if (!newHashes.length) {
     return { saved: false, date };
   }
@@ -692,7 +688,7 @@ function findLatestCustomModuleSnapshotInList(
 }
 
 /** 与 queryCombinedLatestSummary 相同合并规则，但仅从给定快照列表中选取「最新」 */
-function combinedSummaryFromSnapshotList(
+export function combinedSummaryFromSnapshotList(
   snapshots: SnapshotRecord[],
   customModules: { id: string; keywords: string[] }[],
   filter: TrendFilter
