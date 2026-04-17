@@ -110,7 +110,7 @@ npm run start:clean
 
 ## 数据落库与去重
 
-- **持久化方式**：应用文档目录下单文件 `netwise-asset-history.json`，内容为 **AES 加密后的 JSON**（实现见 `src/storage/assetHistoryDb.ts`）。`package.json` 中的 `expo-sqlite` 为依赖项，**当前业务快照未使用 SQLite 表存储**。
+- **持久化方式**：应用文档目录下单文件 `netwise-asset-history.json`，内容为 **AES 加密后的 JSON**（实现见 `src/storage/assetHistoryDb.ts`）。写入时先落盘 **`netwise-asset-history.json.tmp`** 再移动到正式文件名，降低写入中断导致主文件损坏的概率。`package.json` 中的 `expo-sqlite` 为依赖项，**当前业务快照未使用 SQLite 表存储**。
 - **其它本地配置**（明文 JSON，同在文档目录）：
   - `netwise-ocr-custom-rules.json`：自定义 OCR 规则
   - `netwise-custom-recognition-modules.json`：自定义识别模块与折线隐藏状态
@@ -129,6 +129,7 @@ npm run start:clean
 - 原始截图 **不会** 写入上述快照文件，只在本次导入流程里暂时保留
 - 用户点击“确认并记录”后，会立即清掉当前导入图片的预览和内存引用
 - OCR 全量原文仅在 **开发构建**（`__DEV__` 为真，如 Metro）时写入控制台；**Release APK 不会打印**，避免系统日志泄露金融原文
+- 若加密快照文件 **无法解密**（口令变更、文件损坏等），App 会提示并尽量将原文件备份为文档目录下的 `netwise-asset-history.corrupt.*.bak`，**不会**再当作空数据静默继续，也避免「清空全部导入」在未读通时覆盖原文件
 
 ## 趋势图
 

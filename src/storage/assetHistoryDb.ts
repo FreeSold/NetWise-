@@ -61,6 +61,24 @@ type StorePayload = {
 };
 
 const STORE_FILE_NAME = "netwise-asset-history.json";
+/** 与主库同目录的临时文件，写入完成后再 move 到主文件名，降低写入中断导致主文件半写入的风险 */
+const STORE_TEMP_FILE_NAME = `${STORE_FILE_NAME}.tmp`;
+
+/** 解密失败时抛出，携带备份路径（若有）；禁止与「空快照」静默混淆 */
+export class AssetStoreDecryptError extends Error {
+  readonly code = "ASSET_STORE_DECRYPT_FAILED" as const;
+  /** 本会话内首次备份成功时的目标路径；未备份或跳过时为 null */
+  readonly backupUri: string | null;
+
+  constructor(message: string, backupUri: string | null, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "AssetStoreDecryptError";
+    this.backupUri = backupUri;
+  }
+}
+
+/** 本会话内已对损坏主库文件尝试过备份，避免每次 readStore 都复制一份 */
+let corruptMainStoreBackupAttempted = false;
 
 function getTodayDate(): string {
   const now = new Date();
@@ -75,6 +93,13 @@ function getStoreFileUri(): string {
     throw new Error("文件存储目录不可用");
   }
   return `${FileSystem.documentDirectory}${STORE_FILE_NAME}`;
+}
+
+function getStoreTempFileUri(): string {
+  if (!FileSystem.documentDirectory) {
+    throw new Error("文件存储目录不可用");
+  }
+  return `${FileSystem.documentDirectory}${STORE_TEMP_FILE_NAME}`;
 }
 
 export async function initAssetHistoryDb(): Promise<void> {
@@ -720,6 +745,7 @@ export async function clearCurrentDateData(date = getTodayDate()): Promise<void>
 
 /** 仅清空已确认导入的资产快照（折线图与首页统计来源）。不删除自定义识别模块、自定义 OCR 规则等其它 JSON。 */
 export async function clearAllImportHistory(): Promise<void> {
+  await readStore();
   await writeStore({ snapshots: [] });
 }
 
@@ -843,10 +869,27 @@ export async function exportPersistedSnapshotsJsonForDebug(truncateOcrAt = 500):
   );
 }
 
+async function backupCorruptMainStoreFile(sourceUri: string): Promise<string | null> {
+  const base = FileSystem.documentDirectory;
+  if (!base) {
+    return null;
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const destUri = `${base}netwise-asset-history.corrupt.${stamp}.bak`;
+  try {
+    await FileSystem.copyAsync({ from: sourceUri, to: destUri });
+    return destUri;
+  } catch (backupErr) {
+    console.warn("Failed to backup corrupt asset store file", backupErr);
+    return null;
+  }
+}
+
 async function readStore(): Promise<StorePayload> {
   const fileUri = getStoreFileUri();
   const fileInfo = await FileSystem.getInfoAsync(fileUri);
   if (!fileInfo.exists) {
+    corruptMainStoreBackupAttempted = false;
     return { snapshots: [] };
   }
 
@@ -854,19 +897,57 @@ async function readStore(): Promise<StorePayload> {
   const encryptionKey = await getEncryptionKey();
   try {
     const payload = decryptJson<StorePayload>(raw, encryptionKey);
+    corruptMainStoreBackupAttempted = false;
     return {
       snapshots: Array.isArray(payload.snapshots) ? payload.snapshots : []
     };
   } catch (error) {
-    console.warn("Failed to read encrypted asset store", error);
-    return { snapshots: [] };
+    console.error("Failed to decrypt asset store", error);
+    let backupUri: string | null = null;
+    let triedBackupThisInvocation = false;
+    if (!corruptMainStoreBackupAttempted) {
+      backupUri = await backupCorruptMainStoreFile(fileUri);
+      corruptMainStoreBackupAttempted = true;
+      triedBackupThisInvocation = true;
+    }
+    const backupHint = backupUri
+      ? `已将无法解密的加密库文件备份到：\n${backupUri}\n\n`
+      : triedBackupThisInvocation
+        ? "自动备份未成功，原加密文件仍在原位置，请勿当作「无数据」继续操作。\n\n"
+        : "本次未再次备份（本会话内已对损坏文件尝试过备份）。\n\n";
+    const tail =
+      "无法解密资产快照。可能原因：口令变更、文件损坏或存储被篡改。在问题解决前，请勿使用「确认并记录」或「清空全部导入」覆盖原文件；可尝试从备份恢复或在重装前导出数据。";
+    throw new AssetStoreDecryptError(backupHint + tail, backupUri, { cause: error });
   }
 }
 
 async function writeStore(store: StorePayload): Promise<void> {
   const fileUri = getStoreFileUri();
+  const tmpUri = getStoreTempFileUri();
   const encryptionKey = await getEncryptionKey();
-  await FileSystem.writeAsStringAsync(fileUri, encryptJson(store, encryptionKey));
+  const payload = encryptJson(store, encryptionKey);
+  await FileSystem.writeAsStringAsync(tmpUri, payload, {
+    encoding: FileSystem.EncodingType.UTF8
+  });
+  try {
+    await FileSystem.moveAsync({ from: tmpUri, to: fileUri });
+  } catch (firstErr) {
+    try {
+      const destInfo = await FileSystem.getInfoAsync(fileUri);
+      if (destInfo.exists) {
+        await FileSystem.deleteAsync(fileUri, { idempotent: true });
+      }
+      await FileSystem.moveAsync({ from: tmpUri, to: fileUri });
+    } catch (secondErr) {
+      console.error("writeStore: move temp to main failed", secondErr);
+      try {
+        await FileSystem.deleteAsync(tmpUri, { idempotent: true });
+      } catch {
+        /* ignore */
+      }
+      throw firstErr instanceof Error ? firstErr : secondErr instanceof Error ? secondErr : new Error(String(secondErr));
+    }
+  }
 }
 
 function emptyByClassTotals(): Record<AssetClass, number> {

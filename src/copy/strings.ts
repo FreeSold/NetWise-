@@ -77,7 +77,9 @@ export const alerts = {
     confirm: "清除"
   },
   seedClearDoneTitle: "完成",
-  seedClearFailedTitle: "清除失败"
+  seedClearFailedTitle: "清除失败",
+  /** 加密快照库解密失败（见 AssetStoreDecryptError） */
+  assetStoreReadFailedTitle: "无法读取资产快照"
 } as const;
 
 export const notices = {

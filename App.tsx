@@ -59,6 +59,7 @@ import {
   clearCurrentDateData,
   clearSeedTestData,
   type DailySummary,
+  AssetStoreDecryptError,
   ensureDevClientSeedTestDataOnce,
   initAssetHistoryDb,
   queryCombinedLatestSummary,
@@ -407,9 +408,17 @@ export default function App() {
         setDbReady(true);
         setDbInitError(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : errors.unknownDb;
+        const message =
+          error instanceof AssetStoreDecryptError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : errors.unknownDb;
         console.error("DB_INIT_FAILED", error);
         setDbInitError(message);
+        if (error instanceof AssetStoreDecryptError) {
+          Alert.alert(alerts.assetStoreReadFailedTitle, message, [{ text: common.ok }]);
+        }
       }
     }
     void setupDb();
@@ -1253,21 +1262,31 @@ export default function App() {
   }
 
   async function handleClearData() {
-    if (clearMode === "today") {
-      await clearCurrentDateData();
-      setSaveNotice(notices.saveClearedToday);
-    } else if (clearMode === "all") {
-      if (!clearAllStep2) {
-        setClearAllStep2(true);
-        return;
+    try {
+      if (clearMode === "today") {
+        await clearCurrentDateData();
+        setSaveNotice(notices.saveClearedToday);
+      } else if (clearMode === "all") {
+        if (!clearAllStep2) {
+          setClearAllStep2(true);
+          return;
+        }
+        await clearAllImportHistory();
+        setSaveNotice(notices.saveClearedAll);
       }
-      await clearAllImportHistory();
-      setSaveNotice(notices.saveClearedAll);
+      await refreshTrendData();
+      resetWorkingImport();
+      setClearMode(null);
+      setClearAllStep2(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : errors.unknown;
+      setSaveNotice(fmt.saveFailedLine(message));
+      setClearMode(null);
+      setClearAllStep2(false);
+      if (error instanceof AssetStoreDecryptError) {
+        Alert.alert(alerts.assetStoreReadFailedTitle, message, [{ text: common.ok }]);
+      }
     }
-    await refreshTrendData();
-    resetWorkingImport();
-    setClearMode(null);
-    setClearAllStep2(false);
   }
 
   function promptWriteSeedTestData() {
