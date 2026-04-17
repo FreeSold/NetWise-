@@ -25,8 +25,8 @@
 ## 环境准备（Windows）
 
 1. 安装 Node.js LTS（推荐 20+）
-2. 安装手机 `Expo Go` App（安卓/iOS 都可）
-3. 确保手机和电脑在同一个局域网
+2. 本项目含 **原生模块**（如本地 OCR），需使用 **开发构建（Expo Dev Client）** 或 `expo run:android` 安装的包；**不能**指望仅靠官方 `Expo Go` 商店版完整承载全部能力（与 `package.json` 中 `--dev-client` 脚本一致）
+3. 真机联调时确保手机与电脑在同一局域网（若使用 LAN 模式）
 4. 安装完成后，在项目目录执行：
 
 ```bash
@@ -87,19 +87,19 @@ npm run start:clean
 
 该命令会先自动清理占用 `8081` 的 Metro 进程，再启动 Expo。
 
-启动后终端会出现二维码：
-- 用 `Expo Go` 扫码即可在手机运行
-- 或在终端按 `a` 启动 Android 模拟器
+启动后终端会出现二维码或连接提示：
+- 使用已安装的 **Dev Client** 应用扫码连接 Metro（与当前工程匹配的安装包）
+- 或在终端按 `a` 启动 Android 模拟器（需已配置 AVD）
 
 ## OCR 说明（已接入）
 
 当前已接入截图识别流程：
-1. 点击“选择截图并识别”
-2. 从相册选一张金融 App 截图
-3. App 调用 OCR 服务提取文本
+1. 点击选择图片来源（相册或文件）
+2. 可选 **多张** 截图（有上限，以界面为准，当前约 6 张）
+3. App 使用 **本地 ML Kit** 对所选图做 OCR
 4. 自动进入资产分类与统计（默认不展示整段 OCR 原文）
 5. 在“解析结果”里直接修改资产名称/金额/分类（分类为下拉框）
-6. 用户点击“确认并记录到数据库”后，保存快照并更新趋势图
+6. 用户点击“确认并记录”后，将 **加密快照** 写入本地存储并更新趋势图
 
 当前分类固定为：
 - 现金
@@ -110,28 +110,32 @@ npm run start:clean
 
 ## 数据落库与去重
 
-- 数据库：`SQLite`（本地）
-- 记录时机：用户点击“确认并记录到数据库”
+- **持久化方式**：应用文档目录下单文件 `netwise-asset-history.json`，内容为 **AES 加密后的 JSON**（实现见 `src/storage/assetHistoryDb.ts`）。`package.json` 中的 `expo-sqlite` 为依赖项，**当前业务快照未使用 SQLite 表存储**。
+- **其它本地配置**（明文 JSON，同在文档目录）：
+  - `netwise-ocr-custom-rules.json`：自定义 OCR 规则
+  - `netwise-custom-recognition-modules.json`：自定义识别模块与折线隐藏状态
+- 记录时机：用户点击“确认并记录”
 - 去重规则：同一天内，`同一图片 hash` 只记录一次
-- 记录内容：
-  - 图片 `hash`
+- 记录内容（解密后的逻辑结构）：
+  - 图片 `hash` 列表
   - 导入日期
-  - 已加密的资产明细（名称 / 分类 / 金额）
+  - 资产明细（名称 / 分类 / 金额）及按页面类型或自定义模块的 **分桶** 信息；可选保存各图 OCR 全文供自定义模块匹配
 
 ## 隐私与安全
 
 - App 首次启动会要求设置 `6 位数字口令`
 - 后续每次启动都需要先解锁，支持设备已开通时使用生物识别
-- 数据库存储的是 `加密后的资产快照`，不是明文资产记录
-- 原始截图不会写入数据库，只在本次导入流程里暂时保留
-- 用户点击“确认并记录到数据库”后，会立即清掉当前导入图片的预览和内存引用
+- 快照文件内为 **加密后的资产数据**，不是明文堆在磁盘上可读的 JSON
+- 原始截图 **不会** 写入上述快照文件，只在本次导入流程里暂时保留
+- 用户点击“确认并记录”后，会立即清掉当前导入图片的预览和内存引用
 - 当前开发阶段仍保留 OCR 全量日志，便于调试；正式发布前建议关闭
 
 ## 趋势图
 
-- 在页面底部新增“资金趋势折线图”
-- 默认显示“全部”资金趋势
-- 可切换查看：现金 / 基金 / 保险 / 股票 / 理财
+- 页面展示 **总资金趋势** 及 **支付宝 / 招商银行 / 微信** 分平台趋势；支持 **自定义识别模块** 折线（在设置中配置）
+- 主图与各平台卡片可独立切换「全部」或按资产类：现金 / 基金 / 保险 / 股票 / 理财
+- 实现见 `src/components/TrendLineChart.tsx` 与 `assetHistoryDb.ts` 中的查询函数
+- **已优化**：首页刷新各折线与汇总时，改为单次解密快照文件后批量计算（`queryTrendDashboardBundle`），详见根目录《代码优化计划》**§2.1【已优化】**
 
 如果模拟器里“相册选图”不稳定，可改用按钮：
 - `从文件导入图片（模拟器推荐）`
@@ -237,14 +241,26 @@ eas build -p android --profile production
 
 ## 当前结构
 
-- `App.tsx`：MVP 页面（文本输入、解析结果、汇总）
-- `src/parsers/templates.ts`：页面识别与解析规则
-- `src/domain/types.ts`：统一资产模型
+- `App.tsx`：主界面（解锁、多图导入、解析编辑、确认落库、设置、自定义模块向导等；体量已部分拆到 `src/app/`）
+- `src/app/AppStyles.ts`：主界面 `StyleSheet` 样式
+- `src/app/homeUiConstants.ts`：首页 / 设置相关 UI 常量与说明文案键
+- `src/app/importSnapshot.ts`：导入编辑校验与快照 payload 构建
+- `src/app/formatOcrRuleScopeLabel.ts`：OCR 规则作用域展示名
+- `src/app/components/AppLockGate.tsx`：安全初始化与解锁界面
+- `src/parsers/templates.ts`、`src/parsers/shared.ts`：内置页面识别与解析规则
+- `src/domain/types.ts`：统一资产模型、自定义规则与模块类型
 - `src/aggregation/summary.ts`：统计汇总
+- `src/storage/assetHistoryDb.ts`：加密快照读写、去重、趋势序列查询
+- `src/security/appSecurity.ts`：口令哈希、加密密钥、生物识别开关
+- `src/ocr/ocrSpace.ts`：本地 OCR 封装
+- `src/components/TrendLineChart.tsx`：趋势图
+- `src/storage/ocrCustomRulesStore.ts`、`src/storage/customRecognitionModulesStore.ts`：规则与模块的 JSON 读写
+
+更完整的操作说明与需求归纳见项目根目录：`操作文档.md`、`需求分析文档.md`。
 
 ## 下一步（建议）
 
-1. 接入手机端 OCR（优先本地识别）
-2. 解析结果增加人工确认/修正
-3. 持久化存储（SQLite）
-4. 加入历史快照与趋势图
+1. 扩充内置银行/证券类页面模板与回归用截图集
+2. 数据备份 / 导出 / 恢复（加密包或用户可控迁移）
+3. 若需复杂查询或体量增大，再评估 **SQLite 迁移**（与现有加密 JSON 方案做迁移脚本）
+4. 发布前收敛 OCR 调试日志与测试入口开关

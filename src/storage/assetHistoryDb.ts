@@ -199,36 +199,21 @@ function buildMainTrendBreakdownSeries(
   return series;
 }
 
-/**
- * 主资金趋势：每个日期点为「截至该日（含）」按首页同款规则合并后的总资产（或指定资产类别合计）。
- * 数据与顶部「目前为止总资产」同源（持久化快照列表），由存储计算，并非先画线再反推合计。
- */
-export async function queryTrendSeries(
-  filter: TrendFilter,
-  customModules: { id: string; keywords: string[] }[] = []
-): Promise<TrendPoint[]> {
-  const store = await readStore();
-  return buildMainTrendSeriesFromSnapshots(store.snapshots, filter, customModules);
-}
-
-/**
- * 单次读盘同时得到主折线序列与首页「目前为止总资产」。
- * 二者均由同一快照列表按规则独立算出，并列展示；折线末点与 hero 合计在「全部」筛选下口径一致。
- */
-export async function queryStoredMainTrendAndHeroSummary(
+/** 内存快照上计算主折线 + hero + 分项，避免重复读盘解密（供 `queryTrendDashboardBundle` 与单接口复用） */
+function queryStoredMainTrendAndHeroSummaryFromSnapshots(
+  snapshots: SnapshotRecord[],
   mainTrendFilter: TrendFilter,
   customModules: { id: string; keywords: string[] }[]
-): Promise<{
+): {
   mainTrend: TrendPoint[];
   heroSummary: DailySummary;
   mainBreakdown?: TrendSeriesBreakdown[];
-}> {
-  const store = await readStore();
-  const mainTrend = buildMainTrendSeriesFromSnapshots(store.snapshots, mainTrendFilter, customModules);
-  const { total, byClass } = combinedSummaryFromSnapshotList(store.snapshots, customModules, "all");
+} {
+  const mainTrend = buildMainTrendSeriesFromSnapshots(snapshots, mainTrendFilter, customModules);
+  const { total, byClass } = combinedSummaryFromSnapshotList(snapshots, customModules, "all");
   const mainBreakdown =
     mainTrendFilter === "all" && mainTrend.length
-      ? buildMainTrendBreakdownSeries(store.snapshots, customModules)
+      ? buildMainTrendBreakdownSeries(snapshots, customModules)
       : undefined;
   return {
     mainTrend,
@@ -237,13 +222,11 @@ export async function queryStoredMainTrendAndHeroSummary(
   };
 }
 
-/** 平台趋势 + 选「全部」时按资产类的分项（与主图多线口径一致：同日多快照按类相加） */
-export async function queryPlatformTrendSeriesFull(
+function queryPlatformTrendSeriesFullFromSnapshots(
+  snapshots: SnapshotRecord[],
   platform: PlatformTrendFilter,
   filter: TrendFilter = "all"
-): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
-  const store = await readStore();
-  const snapshots = store.snapshots;
+): { primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] } {
   if (filter !== "all") {
     const totalsByDate = new Map<string, number>();
     for (const snapshot of snapshots) {
@@ -302,33 +285,20 @@ export async function queryPlatformTrendSeriesFull(
   return { primary, breakdown: breakdown.length ? breakdown : undefined };
 }
 
-export async function queryPlatformTrendSeries(
-  platform: PlatformTrendFilter,
-  filter: TrendFilter = "all"
-): Promise<TrendPoint[]> {
-  return (await queryPlatformTrendSeriesFull(platform, filter)).primary;
-}
-
-/**
- * 自定义识别模块趋势。
- * 新快照：仅汇总 `assetBuckets` 中 `bucketId === moduleId` 的资产（与导入时分桶一致）。
- * 旧数据：仍按 OCR 关键词 + 内置/自定义行规则推断（`moduleId` 可省略时仅走旧逻辑，需有关键词）。
- */
-export async function queryCustomRecognitionTrendSeriesFull(
+function queryCustomRecognitionTrendSeriesFullFromSnapshots(
+  snapshots: SnapshotRecord[],
   keywords: string[],
   filter: TrendFilter = "all",
   moduleId?: string
-): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
+): { primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] } {
   const compactKws = keywords.map((k) => compactOcrSnippet(k.trim())).filter(Boolean);
   if (!moduleId && !compactKws.length) {
     return { primary: [] };
   }
 
-  const store = await readStore();
-
   if (filter !== "all") {
     const totalsByDate = new Map<string, number>();
-    for (const snapshot of store.snapshots) {
+    for (const snapshot of snapshots) {
       const byPart = snapshotCustomModuleByClass(snapshot, moduleId, compactKws);
       if (!byPart) {
         continue;
@@ -348,7 +318,7 @@ export async function queryCustomRecognitionTrendSeriesFull(
   }
 
   const byDateClass = new Map<string, Record<AssetClass, number>>();
-  for (const snapshot of store.snapshots) {
+  for (const snapshot of snapshots) {
     const byPart = snapshotCustomModuleByClass(snapshot, moduleId, compactKws);
     if (!byPart) {
       continue;
@@ -380,6 +350,112 @@ export async function queryCustomRecognitionTrendSeriesFull(
     }
   }
   return { primary, breakdown: breakdown.length ? breakdown : undefined };
+}
+
+/**
+ * 主资金趋势：每个日期点为「截至该日（含）」按首页同款规则合并后的总资产（或指定资产类别合计）。
+ * 数据与顶部「目前为止总资产」同源（持久化快照列表），由存储计算，并非先画线再反推合计。
+ */
+export async function queryTrendSeries(
+  filter: TrendFilter,
+  customModules: { id: string; keywords: string[] }[] = []
+): Promise<TrendPoint[]> {
+  const store = await readStore();
+  return buildMainTrendSeriesFromSnapshots(store.snapshots, filter, customModules);
+}
+
+/**
+ * 单次读盘同时得到主折线序列与首页「目前为止总资产」。
+ * 二者均由同一快照列表按规则独立算出，并列展示；折线末点与 hero 合计在「全部」筛选下口径一致。
+ */
+export async function queryStoredMainTrendAndHeroSummary(
+  mainTrendFilter: TrendFilter,
+  customModules: { id: string; keywords: string[] }[]
+): Promise<{
+  mainTrend: TrendPoint[];
+  heroSummary: DailySummary;
+  mainBreakdown?: TrendSeriesBreakdown[];
+}> {
+  const store = await readStore();
+  return queryStoredMainTrendAndHeroSummaryFromSnapshots(store.snapshots, mainTrendFilter, customModules);
+}
+
+/** 平台趋势 + 选「全部」时按资产类的分项（与主图多线口径一致：同日多快照按类相加） */
+export async function queryPlatformTrendSeriesFull(
+  platform: PlatformTrendFilter,
+  filter: TrendFilter = "all"
+): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
+  const store = await readStore();
+  return queryPlatformTrendSeriesFullFromSnapshots(store.snapshots, platform, filter);
+}
+
+export async function queryPlatformTrendSeries(
+  platform: PlatformTrendFilter,
+  filter: TrendFilter = "all"
+): Promise<TrendPoint[]> {
+  return (await queryPlatformTrendSeriesFull(platform, filter)).primary;
+}
+
+/**
+ * 自定义识别模块趋势。
+ * 新快照：仅汇总 `assetBuckets` 中 `bucketId === moduleId` 的资产（与导入时分桶一致）。
+ * 旧数据：仍按 OCR 关键词 + 内置/自定义行规则推断（`moduleId` 可省略时仅走旧逻辑，需有关键词）。
+ */
+export async function queryCustomRecognitionTrendSeriesFull(
+  keywords: string[],
+  filter: TrendFilter = "all",
+  moduleId?: string
+): Promise<{ primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }> {
+  const store = await readStore();
+  return queryCustomRecognitionTrendSeriesFullFromSnapshots(store.snapshots, keywords, filter, moduleId);
+}
+
+/** 首页一次刷新内各卡片筛选：三平台 + 主图 + 各自定义模块 */
+export type TrendDashboardPlatformFilters = Record<PlatformTrendFilter, TrendFilter>;
+
+export type TrendDashboardBundle = {
+  mainTrend: TrendPoint[];
+  heroSummary: DailySummary;
+  mainBreakdown?: TrendSeriesBreakdown[];
+  platform: Record<PlatformTrendFilter, { primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }>;
+  customByModuleId: Record<string, { primary: TrendPoint[]; breakdown?: TrendSeriesBreakdown[] }>;
+};
+
+/**
+ * 单次 `readStore`（一次解密）后计算主趋势、hero、三平台与各自定义模块折线，供 UI 刷新使用。
+ */
+export async function queryTrendDashboardBundle(
+  customModules: { id: string; keywords: string[] }[],
+  filters: {
+    mainTrendFilter: TrendFilter;
+    platform: TrendDashboardPlatformFilters;
+    customModuleFilterById: Record<string, TrendFilter>;
+  }
+): Promise<TrendDashboardBundle> {
+  const store = await readStore();
+  const snapshots = store.snapshots;
+  const { mainTrend, heroSummary, mainBreakdown } = queryStoredMainTrendAndHeroSummaryFromSnapshots(
+    snapshots,
+    filters.mainTrendFilter,
+    customModules
+  );
+  const platform: TrendDashboardBundle["platform"] = {
+    alipay: queryPlatformTrendSeriesFullFromSnapshots(snapshots, "alipay", filters.platform.alipay ?? "all"),
+    cmb: queryPlatformTrendSeriesFullFromSnapshots(snapshots, "cmb", filters.platform.cmb ?? "all"),
+    wechat: queryPlatformTrendSeriesFullFromSnapshots(snapshots, "wechat", filters.platform.wechat ?? "all")
+  };
+  const customByModuleId: TrendDashboardBundle["customByModuleId"] = {};
+  for (const m of customModules) {
+    const f = filters.customModuleFilterById[m.id] ?? "all";
+    customByModuleId[m.id] = queryCustomRecognitionTrendSeriesFullFromSnapshots(snapshots, m.keywords, f, m.id);
+  }
+  return {
+    mainTrend,
+    heroSummary,
+    ...(mainBreakdown?.length ? { mainBreakdown } : {}),
+    platform,
+    customByModuleId
+  };
 }
 
 export async function queryCustomRecognitionTrendSeries(
