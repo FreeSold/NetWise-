@@ -1,4 +1,4 @@
-﻿import { Platform, StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 
 export const styles = StyleSheet.create({
   container: {
@@ -743,8 +743,8 @@ export const styles = StyleSheet.create({
     right: 0,
     width: 110,
     zIndex: 20,
-    /** 低于折线图金额浮窗（chartStyles 内 tooltip ~32），避免挡住预览气泡 */
-    elevation: 12,
+    /** 低于折线图金额浮窗（chartStyles 内 tooltipCluster elevation=50），避免挡住预览气泡 */
+    elevation: 8,
     borderWidth: 1,
     borderColor: "#bfdbfe",
     borderRadius: 14,
