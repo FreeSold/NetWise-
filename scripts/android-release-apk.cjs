@@ -62,7 +62,12 @@ function main() {
   const gradleCmd = isWin ? "gradlew.bat" : "./gradlew";
   // Windows 默认代码页常为 GBK：Gradle 富文本进度条与中文日志易乱码。先切 UTF-8，再用纯文本控制台。
   const winPrefix = isWin ? "chcp 65001 >nul && " : "";
-  const gradleArgs = "assembleRelease --console=plain";
+  // 仅打 arm32 + arm64 的 JNI，去掉 x86 / x86_64（主要为模拟器），可明显减小 APK；真机安装一般足够。
+  // 若需在 x86 模拟器上跑本脚本打出的 Release，可临时去掉 -PreactNativeArchitectures 或改用 debug 构建。
+  const gradleArgs =
+    "assembleRelease --console=plain -PreactNativeArchitectures=armeabi-v7a,arm64-v8a";
+  // eslint-disable-next-line no-console
+  console.log("Gradle：Release 仅包含 armeabi-v7a + arm64-v8a（不含 x86/x86_64）");
   execSync(`${winPrefix}${gradleCmd} ${gradleArgs}`, {
     cwd: path.join(root, "android"),
     stdio: "inherit",

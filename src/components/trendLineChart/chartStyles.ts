@@ -80,12 +80,12 @@ export const chartStyles = StyleSheet.create({
     color: "#4f76b3",
     fontSize: 12
   },
-  /** 与 plot 对齐的框仅用于定位，不裁剪子元素 */
+  /** 与 plot 对齐的框仅用于定位，不裁剪子元素；Android 上 elevation 须高于首页趋势卡「类型下拉」与 trendCardMenuLift(24)，否则浮窗被菜单盖住 */
   tooltipPlotOverlay: {
     position: "absolute",
     overflow: "visible",
-    zIndex: 15,
-    elevation: 15
+    zIndex: 50,
+    elevation: 32
   },
   /** 与 chartPlotScroll 同宽、同 translateX，保证浮窗与折线点对齐 */
   tooltipScrollSync: {
@@ -95,7 +95,8 @@ export const chartStyles = StyleSheet.create({
   },
   tooltipCluster: {
     position: "absolute",
-    zIndex: 20,
+    zIndex: 50,
+    elevation: 32,
     alignItems: "center"
   },
   /** 相对原尺寸约 70% */
@@ -112,7 +113,7 @@ export const chartStyles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.16,
     shadowRadius: 4,
-    elevation: 3
+    elevation: 30
   },
   /** 指向下侧数据点的三角 */
   tooltipCaret: {

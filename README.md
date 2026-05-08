@@ -199,7 +199,15 @@ npm run typecheck
 
 ## 打 APK 到手机安装
 
-如果你只是想打一个安卓安装包自己手机使用，按下面做：
+如果你只是想打一个安卓安装包自己手机使用，按下面做。
+
+### 本机 `npm run apk`（Gradle `assembleRelease`）
+
+脚本 `scripts/android-release-apk.cjs` 会在打 **Release** 时传入 **仅 `armeabi-v7a` + `arm64-v8a`**，不包含 **x86 / x86_64** 的 JNI，通常能**明显减小**生成的 APK（面向真机足够）。若你**必须在 x86 模拟器上安装该 Release APK**，请自行在 `android` 目录执行不带 `-PreactNativeArchitectures` 的 `assembleRelease`，或继续使用 `expo run:android` 的 **debug** 包联调。
+
+`app.json` 中 `assetBundlePatterns` 已限制为 **`assets/**/*`**，避免把无关路径打进资源包。
+
+体积上仍占大头的包括：**React Native 运行时、Hermes、`expo-dev-client`（本地开发需要）、ML Kit 文字识别原生库**等。若未来要做**上架级极限瘦身**，需评估单独产物（例如不含 Dev Client 的变体或使用 Play App Bundle 按 ABI 分发）。
 
 ### 1) 安装 EAS CLI
 
