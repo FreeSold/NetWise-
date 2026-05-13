@@ -21,7 +21,8 @@ export function TrendLineChart({
   points,
   chartTooltipOpacity = 1,
   breakdownByClass,
-  primarySeriesLabel = "全部"
+  primarySeriesLabel = "全部",
+  renderChartHeader
 }: TrendLineChartProps) {
   const [width, setWidth] = useState(320);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -218,6 +219,7 @@ export function TrendLineChart({
 
   return (
     <View style={styles.container} onLayout={(e) => setWidth(Math.max(280, e.nativeEvent.layout.width))}>
+      {renderChartHeader?.()}
       <View style={[styles.chartSurface, { width, height }]}>
         <View
           style={[
@@ -400,82 +402,83 @@ export function TrendLineChart({
             </Text>
           ))}
         </View>
+      </View>
 
-        <View
+      {/* 浮窗移到 chartSurface 外部，脱离其层叠上下文的限制 */}
+      <View
+        style={[
+          styles.tooltipPlotOverlay,
+          {
+            top: paddingY,
+            left: computed.chartLeft,
+            width: computed.plotW,
+            height: computed.plotInnerH
+          }
+        ]}
+        pointerEvents="none"
+      >
+        <Animated.View
           style={[
-            styles.tooltipPlotOverlay,
+            styles.tooltipScrollSync,
             {
-              top: paddingY,
-              left: computed.chartLeft,
-              width: computed.plotW,
-              height: computed.plotInnerH
+              width: computed.bufferScrollW,
+              height: computed.plotInnerH,
+              transform: [{ translateX: dragX }]
             }
           ]}
           pointerEvents="none"
         >
-          <Animated.View
-            style={[
-              styles.tooltipScrollSync,
-              {
-                width: computed.bufferScrollW,
-                height: computed.plotInnerH,
-                transform: [{ translateX: dragX }]
-              }
-            ]}
-            pointerEvents="none"
-          >
-            {activeDot ? (
-              <View
-                style={[
-                  styles.tooltipCluster,
-                  {
-                    left:
-                      activeDot.x - (tooltipClusterW !== null ? tooltipClusterW : TOOLTIP_WIDTH_FALLBACK) / 2,
-                    bottom: computed.plotInnerH - activeDot.y,
-                    opacity: chartTooltipOpacity
-                  }
-                ]}
-                pointerEvents="none"
-                onLayout={(e) => {
-                  const w = Math.round(e.nativeEvent.layout.width);
-                  if (w <= 0) {
-                    return;
-                  }
-                  setTooltipClusterW((prev) => (prev === w ? prev : w));
-                }}
-              >
-                <View style={styles.tooltipBubble}>
-                  <Text style={styles.tooltipDate}>{activeDot.date}</Text>
-                  {breakdownByClass?.length ? (
-                    <>
-                      <Text style={styles.tooltipAmountPrimary}>
-                        {primarySeriesLabel} {activeDot.total.toFixed(2)} 元
-                      </Text>
-                      {(breakdownByClass ?? [])
-                        .map((ser) => {
-                          const pt = ser.points.find((p) => p.date === activeDot.date);
-                          const v = pt?.total ?? 0;
-                          return { ser, v };
-                        })
-                        .filter(({ v }) => v > 0)
-                        .map(({ ser, v }) => (
-                          <Text
-                            key={ser.assetClass}
-                            style={[styles.tooltipBreakdownLine, { color: BREAKDOWN_LINE_COLORS[ser.assetClass] }]}
-                          >
-                            {BREAKDOWN_CLASS_LABEL[ser.assetClass]} {v.toFixed(2)} 元
-                          </Text>
-                        ))}
-                    </>
-                  ) : (
-                    <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
-                  )}
-                </View>
-                <View style={styles.tooltipCaret} />
+          {activeDot ? (
+            <View
+              style={[
+                styles.tooltipCluster,
+                {
+                  left:
+                    activeDot.x - (tooltipClusterW !== null ? tooltipClusterW : TOOLTIP_WIDTH_FALLBACK) / 2,
+                  bottom: computed.plotInnerH - activeDot.y,
+                  opacity: chartTooltipOpacity
+                }
+              ]}
+              pointerEvents="none"
+              onLayout={(e) => {
+                const w = Math.round(e.nativeEvent.layout.width);
+                if (w <= 0) {
+                  return;
+                }
+                setTooltipClusterW((prev) => (prev === w ? prev : w));
+              }}
+            >
+              <View style={styles.tooltipBubble}>
+                <Text style={styles.tooltipDate}>{activeDot.date}</Text>
+                {breakdownByClass?.length ? (
+                  <>
+                    <Text style={styles.tooltipAmountPrimary}>
+                      {primarySeriesLabel} {activeDot.total.toFixed(2)} 元
+                    </Text>
+                    {(breakdownByClass ?? [])
+                      .map((ser) => {
+                        const pt = ser.points.find((p) => p.date === activeDot.date);
+                        const v = pt?.total ?? 0;
+                        return { ser, v };
+                      })
+                      .filter(({ v }) => v > 0)
+                      .map(({ ser, v }) => (
+                        <Text
+                          key={ser.assetClass}
+                          style={[styles.tooltipBreakdownLine, { color: BREAKDOWN_LINE_COLORS[ser.assetClass] }]}
+                        >
+                          {BREAKDOWN_CLASS_LABEL[ser.assetClass]} {v.toFixed(2)} 元
+                        </Text>
+                      ))}
+                  </>
+                ) : (
+                  <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
+                )}
               </View>
-            ) : null}
-          </Animated.View>
-        </View>
+              <View style={styles.tooltipCaret} />
+            </View>
+          ) : null}
+        </Animated.View>
       </View>
       <Text style={styles.rangeHint}>{rangeLabel}</Text>
     </View>

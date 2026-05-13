@@ -11,7 +11,7 @@ export const chartStyles = StyleSheet.create({
     position: "relative",
     alignSelf: "center",
     overflow: "visible",
-    zIndex: 2
+    zIndex: 0
   },
   /** 轴线围成的绘图区内：左=Y 轴内侧，右=右内边距，上/下=上下轴线 */
   chartPlotClip: {

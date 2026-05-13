@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { TrendPoint, TrendSeriesBreakdown } from "../../storage/assetHistoryDb";
 
 export type TrendLineChartProps = {
@@ -8,4 +9,6 @@ export type TrendLineChartProps = {
   primarySeriesLabel?: string;
   /** 与设置页卡片透明度联动，浮窗不透明度（建议传 moduleControlOpacity，约 0.5～1） */
   chartTooltipOpacity?: number;
+  /** 渲染在 container 内（浮窗与折线图同一层叠上下文）的标题行（含下拉框） */
+  renderChartHeader?: () => ReactNode;
 };

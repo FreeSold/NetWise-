@@ -1938,22 +1938,24 @@ export default function App() {
             trendCardMenuLiftStyle("trend-main")
           ]}
         >
-          <View style={styles.trendHeaderRow}>
-            <View style={styles.trendHeaderTitleCluster}>
-              <View style={styles.cardTitleHintRow}>
-                <Text style={styles.cardTitle} numberOfLines={1}>
-                  {labels.trendMainChartTitle}
-                </Text>
-                {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
-              </View>
-            </View>
-            {renderTrendTypePicker("trend-main")}
-          </View>
           <TrendLineChart
             points={trendPoints}
             breakdownByClass={mainTrendBreakdown}
             primarySeriesLabel={labels.chartPrimaryAll}
             chartTooltipOpacity={moduleControlOpacity}
+            renderChartHeader={() => (
+              <View style={styles.trendHeaderRow}>
+                <View style={styles.trendHeaderTitleCluster}>
+                  <View style={styles.cardTitleHintRow}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {labels.trendMainChartTitle}
+                    </Text>
+                    {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
+                  </View>
+                </View>
+                {renderTrendTypePicker("trend-main")}
+              </View>
+            )}
           />
           {debugJsonDumpsVisible ? (
             <>
@@ -1973,19 +1975,21 @@ export default function App() {
               trendCardMenuLiftStyle(`platform-${platform}`)
             ]}
           >
-            <View style={styles.trendHeaderRow}>
-              <View style={styles.trendHeaderTitleCluster}>
-                <Text style={styles.cardTitle} numberOfLines={1}>
-                  {PLATFORM_TREND_LABEL[platform]}
-                </Text>
-              </View>
-              {renderTrendTypePicker(`platform-${platform}`)}
-            </View>
             <TrendLineChart
               points={platformTrendPoints[platform]}
               breakdownByClass={platformTrendBreakdown[platform]}
               primarySeriesLabel={labels.chartPrimaryAll}
               chartTooltipOpacity={moduleControlOpacity}
+              renderChartHeader={() => (
+                <View style={styles.trendHeaderRow}>
+                  <View style={styles.trendHeaderTitleCluster}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {PLATFORM_TREND_LABEL[platform]}
+                    </Text>
+                  </View>
+                  {renderTrendTypePicker(`platform-${platform}`)}
+                </View>
+              )}
             />
             {debugJsonDumpsVisible ? (
               <>
@@ -2011,19 +2015,21 @@ export default function App() {
               trendCardMenuLiftStyle(`cm-${m.id}`)
             ]}
           >
-            <View style={styles.trendHeaderRow}>
-              <View style={styles.trendHeaderTitleCluster}>
-                <Text style={styles.cardTitle} numberOfLines={1}>
-                  {fmt.customModuleTrendTitle(m.displayName)}
-                </Text>
-              </View>
-              {renderTrendTypePicker(`cm-${m.id}`)}
-            </View>
             <TrendLineChart
               points={customModuleTrendPoints[m.id] ?? []}
               breakdownByClass={customModuleTrendBreakdown[m.id]}
               primarySeriesLabel={labels.chartPrimaryAll}
               chartTooltipOpacity={moduleControlOpacity}
+              renderChartHeader={() => (
+                <View style={styles.trendHeaderRow}>
+                  <View style={styles.trendHeaderTitleCluster}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {fmt.customModuleTrendTitle(m.displayName)}
+                    </Text>
+                  </View>
+                  {renderTrendTypePicker(`cm-${m.id}`)}
+                </View>
+              )}
             />
             {debugJsonDumpsVisible ? (
               <>
