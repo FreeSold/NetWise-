@@ -74,6 +74,10 @@ import {
   type TrendPoint,
   type TrendSeriesBreakdown
 } from "./src/storage/assetHistoryDb";
+import { queryBillSummary, queryBillEntries } from "./src/storage/billHistoryDb";
+import type { BillSummary, BillEntry } from "./src/storage/billHistoryDb";
+import { BillPage, BillSummaryCard, BillListCard, BillDetailModal, defaultBillFilter } from "./src/components/bill";
+import type { BillFilter } from "./src/components/bill";
 import { loadCustomRecognitionModules, saveCustomRecognitionModules } from "./src/storage/customRecognitionModulesStore";
 import { loadOcrCustomRules, normalizeOcrRuleScreenScope, saveOcrCustomRules } from "./src/storage/ocrCustomRulesStore";
 import { splitRecognitionKeywords } from "./src/utils/splitRecognitionKeywords";
@@ -115,6 +119,11 @@ export default function App() {
     total: 0,
     byClass: { cash: 0, fund: 0, insurance: 0, stock: 0, wealth_management: 0 }
   });
+  const [billSummary, setBillSummary] = useState<BillSummary>({ totalIncome: 0, totalExpense: 0, balance: 0 });
+  const [billEntries, setBillEntries] = useState<BillEntry[]>([]);
+  const [selectedBillEntry, setSelectedBillEntry] = useState<BillEntry | null>(null);
+  const [billDetailVisible, setBillDetailVisible] = useState(false);
+  const [billFilter, setBillFilter] = useState<BillFilter>(defaultBillFilter);
   /** 各折线卡片独立的展示类型，key：trend-main / platform-alipay / platform-cmb / platform-wechat / cm-模块id */
   const [trendFiltersByModule, setTrendFiltersByModule] = useState<Record<string, TrendFilter>>({});
   /** 当前展开「折线类型」下拉的卡片 key，null 表示全关 */
@@ -425,6 +434,17 @@ export default function App() {
     }
     void setupDb();
   }, []);
+
+  useEffect(() => {
+    async function loadBillData() {
+      const [summary, entries] = await Promise.all([queryBillSummary(), queryBillEntries()]);
+      setBillSummary(summary);
+      setBillEntries(entries);
+    }
+    if (dbReady) {
+      void loadBillData();
+    }
+  }, [dbReady]);
 
   useEffect(() => {
     async function loadTrend() {
@@ -2043,10 +2063,19 @@ export default function App() {
         ) : (
         /* 账单视图 */
         <>
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>账单记录</Text>
-            <Text style={styles.billPlaceholderText}>账单功能开发中...</Text>
-          </View>
+          <BillSummaryCard summary={billSummary} filter={billFilter} onFilterChange={setBillFilter} />
+          <BillListCard
+            entries={billEntries}
+            onEntryPress={(entry) => {
+              setSelectedBillEntry(entry);
+              setBillDetailVisible(true);
+            }}
+          />
+          <BillDetailModal
+            entry={selectedBillEntry}
+            visible={billDetailVisible}
+            onClose={() => setBillDetailVisible(false)}
+          />
         </>
         )}
       </ScrollView>
