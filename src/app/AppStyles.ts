@@ -72,6 +72,42 @@ export const styles = StyleSheet.create({
     padding: 16,
     overflow: "visible"
   },
+  /** 资产/账单切换按钮容器 */
+  viewTabContainer: {
+    flexDirection: "row",
+    backgroundColor: "#e2e8f0",
+    borderRadius: 10,
+    padding: 3,
+    gap: 2
+  },
+  /** 切换按钮 */
+  viewTabButton: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    borderRadius: 8
+  },
+  /** 切换按钮选中态 */
+  viewTabButtonActive: {
+    backgroundColor: "#0b63c8"
+  },
+  /** 切换按钮文字 */
+  viewTabButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#64748b"
+  },
+  /** 切换按钮文字选中态 */
+  viewTabButtonTextActive: {
+    color: "white"
+  },
+  /** 账单页占位文字 */
+  billPlaceholderText: {
+    color: "#94a3b8",
+    fontSize: 14,
+    textAlign: "center",
+    paddingVertical: 40
+  },
   heroCard: {
     backgroundColor: "#0b63c8",
     borderRadius: 14,

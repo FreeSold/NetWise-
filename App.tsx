@@ -80,6 +80,8 @@ import { splitRecognitionKeywords } from "./src/utils/splitRecognitionKeywords";
 
 export default function App() {
   const androidTopInset = Platform.OS === "android" ? (NativeStatusBar.currentHeight ?? 0) : 0;
+  /** 当前主视图：资产 / 账单 */
+  const [mainView, setMainView] = useState<"asset" | "bill">("asset");
   const [selectedImageUris, setSelectedImageUris] = useState<string[]>([]);
   const [importedImageMetas, setImportedImageMetas] = useState<ImportedImageMeta[]>([]);
   const [ocrLoading, setOcrLoading] = useState(false);
@@ -1863,6 +1865,29 @@ export default function App() {
       </Modal>
 
       <ScrollView nestedScrollEnabled contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
+        {/* 资产/账单切换按钮 */}
+        <View style={styles.viewTabContainer}>
+          <Pressable
+            style={[styles.viewTabButton, mainView === "asset" ? styles.viewTabButtonActive : null]}
+            onPress={() => setMainView("asset")}
+          >
+            <Text style={[styles.viewTabButtonText, mainView === "asset" ? styles.viewTabButtonTextActive : null]}>
+              资产
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.viewTabButton, mainView === "bill" ? styles.viewTabButtonActive : null]}
+            onPress={() => setMainView("bill")}
+          >
+            <Text style={[styles.viewTabButtonText, mainView === "bill" ? styles.viewTabButtonTextActive : null]}>
+              账单
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* 资产视图 */}
+        {mainView === "asset" ? (
+        <>
         <View style={styles.heroCard}>
           <View style={styles.heroTopRow}>
             <Text style={styles.heroHint}>{labels.heroTotalHint}</Text>
@@ -2008,6 +2033,16 @@ export default function App() {
             ) : null}
           </View>
         ))}
+        </>
+        ) : (
+        /* 账单视图 */
+        <>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>账单记录</Text>
+            <Text style={styles.billPlaceholderText}>账单功能开发中...</Text>
+          </View>
+        </>
+        )}
       </ScrollView>
 
       {settingsVisible ? (

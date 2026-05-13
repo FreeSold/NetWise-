@@ -11,8 +11,7 @@ export const chartStyles = StyleSheet.create({
     position: "relative",
     alignSelf: "center",
     overflow: "visible",
-    /** 须高于趋势卡内金额类型下拉框（zIndex: 20），确保点击折线点弹出的金额浮窗始终在最上层 */
-    zIndex: 100
+    zIndex: 2
   },
   /** 轴线围成的绘图区内：左=Y 轴内侧，右=右内边距，上/下=上下轴线 */
   chartPlotClip: {
