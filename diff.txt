@@ -1,0 +1,226 @@
+diff --git a/App.tsx b/App.tsx
+index 1a80719..4cdb278 100644
+--- a/App.tsx
++++ b/App.tsx
+@@ -124,6 +124,8 @@ export default function App() {
+   const [selectedBillEntry, setSelectedBillEntry] = useState<BillEntry | null>(null);
+   const [billDetailVisible, setBillDetailVisible] = useState(false);
+   const [billFilter, setBillFilter] = useState<BillFilter>(defaultBillFilter);
++  /** 资产页皮肤模式，true=暗色，false=明亮 */
++  const [assetDarkMode, setAssetDarkMode] = useState(true);
+   /** 各折线卡片独立的展示类型，key：trend-main / platform-alipay / platform-cmb / platform-wechat / cm-模块id */
+   const [trendFiltersByModule, setTrendFiltersByModule] = useState<Record<string, TrendFilter>>({});
+   /** 当前展开「折线类型」下拉的卡片 key，null 表示全关 */
+@@ -195,6 +197,23 @@ export default function App() {
+   const modulePressOpacityStyle = (factor = 1) => ({ opacity: moduleControlOpacity * factor });
+   const hiddenPlatformModules = PLATFORM_TREND_ORDER.filter((platform) => !visiblePlatformModules.includes(platform));
+ 
++  // 资产页皮肤样式（true=暗色，false=明亮）
++  const assetSkin = {
++    heroCardBg: assetDarkMode ? "#1e3a5f" : "#0b63c8",
++    heroHintColor: assetDarkMode ? "#93c5fd" : "#bfdbfe",
++    cardBg: assetDarkMode ? "#1e3a5f" : "rgba(255,255,255,0.86)",
++    cardBorder: assetDarkMode ? "rgba(255,255,255,0.1)" : "#e2e8f0",
++    cardTitleColor: assetDarkMode ? "white" : "#1e293b",
++    cardSubColor: assetDarkMode ? "#93c5fd" : "#64748b",
++    textPrimary: assetDarkMode ? "white" : "#1e293b",
++    textSecondary: assetDarkMode ? "#94a3b8" : "#64748b",
++    textAccent: assetDarkMode ? "#34d399" : "#059669",
++    chartLineColor: assetDarkMode ? "#2563eb" : "#2563eb",
++    chartGridColor: assetDarkMode ? "rgba(255,255,255,0.1)" : "#f1f5f9",
++    chartTextColor: assetDarkMode ? "#94a3b8" : "#64748b",
++    cardBgOpaque: assetDarkMode ? "#1e3a5f" : "white",
++  };
++
+   function renderModuleInfoIcon(title: string, body: string, useModuleOpacity = false) {
+     return (
+       <Pressable
+@@ -221,21 +240,26 @@ export default function App() {
+   function renderTrendTypePicker(menuKey: string) {
+     const menuOpen = trendMenuFor === menuKey;
+     const selected = trendFilterForMenuKey(menuKey);
++    const darkStyle = assetDarkMode;
+     return (
+       <View style={styles.trendPickerArea}>
+         <Pressable
+-          style={[styles.trendPickerWrap, modulePressOpacityStyle()]}
++          style={[
++            styles.trendPickerWrap,
++            modulePressOpacityStyle(),
++            darkStyle && { backgroundColor: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.2)" }
++          ]}
+           onPress={() => setTrendMenuFor((prev) => (prev === menuKey ? null : menuKey))}
+         >
+-          <Text style={styles.trendPickerLabel}>{TREND_FILTER_LABEL[selected]}</Text>
+-          <Text style={styles.trendPickerArrow}>▼</Text>
++          <Text style={[styles.trendPickerLabel, darkStyle && { color: "white" }]}>{TREND_FILTER_LABEL[selected]}</Text>
++          <Text style={[styles.trendPickerArrow, darkStyle && { color: "#93c5fd" }]}>▼</Text>
+         </Pressable>
+         {menuOpen ? (
+-          <View style={[styles.trendDropdownMenu, modulePressOpacityStyle()]}>
++          <View style={[styles.trendDropdownMenu, modulePressOpacityStyle(), darkStyle && { backgroundColor: "#1e3a5f", borderColor: "rgba(255,255,255,0.2)" }]}>
+             {TREND_FILTER_ORDER.map((f) => (
+               <Pressable
+                 key={f}
+-                style={[styles.trendDropdownItem, f === selected ? styles.trendDropdownItemActive : null]}
++                style={[styles.trendDropdownItem, f === selected ? styles.trendDropdownItemActive : null, darkStyle && f === selected && { backgroundColor: "rgba(59,130,246,0.4)" }]}
+                 onPress={() => {
+                   setTrendFiltersByModule((prev) => {
+                     const cur = prev[menuKey] ?? "all";
+@@ -250,7 +274,8 @@ export default function App() {
+                 <Text
+                   style={[
+                     styles.trendDropdownItemText,
+-                    f === selected ? styles.trendDropdownItemTextActive : null
++                    f === selected ? styles.trendDropdownItemTextActive : null,
++                    darkStyle && { color: "white" }
+                   ]}
+                 >
+                   {TREND_FILTER_LABEL[f]}
+@@ -1908,9 +1933,9 @@ export default function App() {
+         {/* 资产视图 */}
+         {mainView === "asset" ? (
+         <>
+-        <View style={styles.heroCard}>
++        <View style={[styles.heroCard, { backgroundColor: assetSkin.heroCardBg }]}>
+           <View style={styles.heroTopRow}>
+-            <Text style={styles.heroHint}>{labels.heroTotalHint}</Text>
++            <Text style={[styles.heroHint, { color: assetSkin.heroHintColor }]}>{labels.heroTotalHint}</Text>
+             <View style={styles.heroActions}>
+               <Pressable style={[styles.manageButton, modulePressOpacityStyle()]} onPress={() => setManageVisible(true)}>
+                 <Text style={styles.manageButtonText}>{labels.importButton}</Text>
+@@ -1920,31 +1945,31 @@ export default function App() {
+               </Pressable>
+             </View>
+           </View>
+-          <Text style={styles.heroTotal}>{formatDisplayAmount(dailySummary.total)}</Text>
++          <Text style={[styles.heroTotal, { color: "white" }]}>{formatDisplayAmount(dailySummary.total)}</Text>
+           {dbInitError ? <Text style={styles.heroError}>{fmt.heroDbErrorLine(dbInitError)}</Text> : null}
+           <View style={styles.quickStatsColumn}>
+             <View style={styles.quickStatRow}>
+               <View style={styles.quickStatItem}>
+-                <Text style={styles.quickStatLabel}>{labels.quickStatCash}</Text>
+-                <Text style={styles.quickStatValue}>{cashAmount.toFixed(2)}</Text>
++                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatCash}</Text>
++                <Text style={[styles.quickStatValue, { color: "white" }]}>{cashAmount.toFixed(2)}</Text>
+               </View>
+               <View style={styles.quickStatItem}>
+-                <Text style={styles.quickStatLabel}>{labels.quickStatFund}</Text>
+-                <Text style={styles.quickStatValue}>{fundAmount.toFixed(2)}</Text>
++                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatFund}</Text>
++                <Text style={[styles.quickStatValue, { color: "white" }]}>{fundAmount.toFixed(2)}</Text>
+               </View>
+               <View style={styles.quickStatItem}>
+-                <Text style={styles.quickStatLabel}>{labels.quickStatInsurance}</Text>
+-                <Text style={styles.quickStatValue}>{insuranceAmount.toFixed(2)}</Text>
++                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatInsurance}</Text>
++                <Text style={[styles.quickStatValue, { color: "white" }]}>{insuranceAmount.toFixed(2)}</Text>
+               </View>
+             </View>
+             <View style={styles.quickStatRow}>
+               <View style={styles.quickStatItem}>
+-                <Text style={styles.quickStatLabel}>{labels.quickStatStock}</Text>
+-                <Text style={styles.quickStatValue}>{stockAmount.toFixed(2)}</Text>
++                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatStock}</Text>
++                <Text style={[styles.quickStatValue, { color: "white" }]}>{stockAmount.toFixed(2)}</Text>
+               </View>
+               <View style={styles.quickStatItem}>
+-                <Text style={styles.quickStatLabel}>{labels.quickStatWealth}</Text>
+-                <Text style={styles.quickStatValue}>{wealthManagementAmount.toFixed(2)}</Text>
++                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatWealth}</Text>
++                <Text style={[styles.quickStatValue, { color: "white" }]}>{wealthManagementAmount.toFixed(2)}</Text>
+               </View>
+             </View>
+           </View>
+@@ -1954,7 +1979,7 @@ export default function App() {
+           collapsable={false}
+           style={[
+             styles.card,
+-            { backgroundColor: cardBackgroundColor },
++            { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: assetSkin.cardBorder, borderWidth: assetDarkMode ? 0 : 1 },
+             trendCardMenuLiftStyle("trend-main")
+           ]}
+         >
+@@ -1967,7 +1992,7 @@ export default function App() {
+               <View style={styles.trendHeaderRow}>
+                 <View style={styles.trendHeaderTitleCluster}>
+                   <View style={styles.cardTitleHintRow}>
+-                    <Text style={styles.cardTitle} numberOfLines={1}>
++                    <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                       {labels.trendMainChartTitle}
+                     </Text>
+                     {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
+@@ -1991,7 +2016,7 @@ export default function App() {
+             collapsable={false}
+             style={[
+               styles.card,
+-              { backgroundColor: cardBackgroundColor },
++              { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: assetSkin.cardBorder, borderWidth: assetDarkMode ? 0 : 1 },
+               trendCardMenuLiftStyle(`platform-${platform}`)
+             ]}
+           >
+@@ -2003,7 +2028,7 @@ export default function App() {
+               renderChartHeader={() => (
+                 <View style={styles.trendHeaderRow}>
+                   <View style={styles.trendHeaderTitleCluster}>
+-                    <Text style={styles.cardTitle} numberOfLines={1}>
++                    <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                       {PLATFORM_TREND_LABEL[platform]}
+                     </Text>
+                   </View>
+@@ -2031,7 +2056,7 @@ export default function App() {
+             collapsable={false}
+             style={[
+               styles.card,
+-              { backgroundColor: cardBackgroundColor },
++              { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: assetSkin.cardBorder, borderWidth: assetDarkMode ? 0 : 1 },
+               trendCardMenuLiftStyle(`cm-${m.id}`)
+             ]}
+           >
+@@ -2043,7 +2068,7 @@ export default function App() {
+               renderChartHeader={() => (
+                 <View style={styles.trendHeaderRow}>
+                   <View style={styles.trendHeaderTitleCluster}>
+-                    <Text style={styles.cardTitle} numberOfLines={1}>
++                    <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                       {fmt.customModuleTrendTitle(m.displayName)}
+                     </Text>
+                   </View>
+@@ -2126,6 +2151,18 @@ export default function App() {
+                   <Text style={styles.opacityTrackPercentText}>{cardOpacityPercent}%</Text>
+                 </View>
+               </View>
++              {/* 皮肤切换按钮 */}
++              <Pressable
++                style={[styles.skinSwitchButton, modulePressOpacityStyle()]}
++                onPress={() => setAssetDarkMode(prev => !prev)}
++              >
++                <View style={styles.skinGradientBlock}>
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#1e3a5f" : "#f8fafc" }]} />
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#2563eb" : "#93c5fd" }]} />
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#f87171" : "#fbbf24" }]} />
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#34d399" : "#1e3a5f" }]} />
++                </View>
++              </Pressable>
+             </View>
+           </View>
+           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+@@ -2347,6 +2384,18 @@ export default function App() {
+                   <Text style={styles.clearActionText}>{labels.clearAllImports}</Text>
+                 </Pressable>
+               </View>
++              {/* 皮肤切换按钮 */}
++              <Pressable
++                style={[styles.skinSwitchButton, modulePressOpacityStyle()]}
++                onPress={() => setAssetDarkMode(prev => !prev)}
++              >
++                <View style={styles.skinGradientBlock}>
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#1e3a5f" : "#f8fafc" }]} />
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#2563eb" : "#93c5fd" }]} />
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#f87171" : "#fbbf24" }]} />
++                  <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#34d399" : "#1e3a5f" }]} />
++                </View>
++              </Pressable>
+             </View>
+           </View>
+           <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>

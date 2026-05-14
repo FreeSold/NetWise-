@@ -1185,7 +1185,10 @@ export const styles = StyleSheet.create({
   opacityTrackTouch: {
     flex: 1,
     minWidth: 0,
-    height: 30
+    height: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
   },
   opacityTrackClip: {
     flex: 1,
@@ -1219,6 +1222,23 @@ export const styles = StyleSheet.create({
     textShadowColor: "rgba(255,255,255,0.85)",
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 3
+  },
+  skinSwitchButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    overflow: "hidden",
+    marginLeft: 8
+  },
+  skinGradientBlock: {
+    width: 32,
+    height: 32,
+    flexDirection: "row",
+    flexWrap: "wrap"
+  },
+  skinGradientQuarter: {
+    width: 16,
+    height: 16
   },
   securityActionButton: {
     borderRadius: 8,

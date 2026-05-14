@@ -154,14 +154,14 @@ export const chartStyles = StyleSheet.create({
   },
   emptyWrap: {
     borderWidth: 1,
-    borderColor: "#b7d4fb",
+    borderColor: "rgba(148,163,184,0.3)",
     borderRadius: 10,
     paddingVertical: 20,
     alignItems: "center",
-    backgroundColor: "#f4f8ff"
+    backgroundColor: "rgba(148,163,184,0.1)"
   },
   emptyText: {
-    color: "#4f76b3"
+    color: "#94a3b8"
   },
   rangeHint: {
     alignSelf: "center",

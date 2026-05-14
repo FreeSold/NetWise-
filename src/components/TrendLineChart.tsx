@@ -27,6 +27,8 @@ export function TrendLineChart({
   const [width, setWidth] = useState(320);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [tooltipClusterW, setTooltipClusterW] = useState<number | null>(null);
+  const [tooltipHeight, setTooltipHeight] = useState(0);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const visibleDotsSelectionKeyRef = useRef<string | null>(null);
   const height = 180;
   const paddingY = 28;
@@ -143,6 +145,7 @@ export function TrendLineChart({
 
   useLayoutEffect(() => {
     setTooltipClusterW(null);
+    setTooltipHeight(0);
   }, [selectedDate]);
 
   const frozenPanScrollInitedRef = useRef(false);
@@ -219,7 +222,11 @@ export function TrendLineChart({
 
   return (
     <View style={styles.container} onLayout={(e) => setWidth(Math.max(280, e.nativeEvent.layout.width))}>
-      {renderChartHeader?.()}
+      {renderChartHeader ? (
+        <View style={{ width: "100%" }} onLayout={(e) => setHeaderHeight(Math.round(e.nativeEvent.layout.height))}>
+          {renderChartHeader()}
+        </View>
+      ) : null}
       <View style={[styles.chartSurface, { width, height }]}>
         <View
           style={[
@@ -287,16 +294,6 @@ export function TrendLineChart({
                 />
               ))}
               <Path d={computed.path} stroke="#2563eb" strokeWidth={2} fill="none" />
-              {computed.dots.map((dot, index) => (
-                <Circle
-                  key={`${dot.date}-${dot.total}-${index}`}
-                  cx={dot.x}
-                  cy={dot.y}
-                  r={index === safeActiveIndex ? 5 : 3}
-                  fill={index === safeActiveIndex ? "#1d4ed8" : "#2563eb"}
-                  pointerEvents="none"
-                />
-              ))}
             </Svg>
             <View style={styles.panLayer} {...panResponder.panHandlers} accessibilityLabel="横向拖动查看历史数据">
               <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedDate(null)} accessibilityRole="button" />
@@ -402,14 +399,15 @@ export function TrendLineChart({
             </Text>
           ))}
         </View>
+
       </View>
 
-      {/* 浮窗移到 chartSurface 外部，脱离其层叠上下文的限制 */}
+      {/* 浮窗移到 chartSurface 外部，与 header 同级，避免被下拉菜单遮挡 */}
       <View
         style={[
           styles.tooltipPlotOverlay,
           {
-            top: paddingY,
+            top: headerHeight + 4 + paddingY,
             left: computed.chartLeft,
             width: computed.plotW,
             height: computed.plotInnerH
@@ -435,17 +433,21 @@ export function TrendLineChart({
                 {
                   left:
                     activeDot.x - (tooltipClusterW !== null ? tooltipClusterW : TOOLTIP_WIDTH_FALLBACK) / 2,
-                  bottom: computed.plotInnerH - activeDot.y,
+                  // tooltipHeight 不包含 border 三角形的布局高度，caret 尖端在 bubble 底部 -1(marginTop)
+                  top: activeDot.y - tooltipHeight + 1,
                   opacity: chartTooltipOpacity
                 }
               ]}
               pointerEvents="none"
               onLayout={(e) => {
                 const w = Math.round(e.nativeEvent.layout.width);
-                if (w <= 0) {
-                  return;
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (w > 0) {
+                  setTooltipClusterW((prev) => (prev === w ? prev : w));
                 }
-                setTooltipClusterW((prev) => (prev === w ? prev : w));
+                if (h > 0) {
+                  setTooltipHeight((prev) => (prev === h ? prev : h));
+                }
               }}
             >
               <View style={styles.tooltipBubble}>
@@ -480,6 +482,7 @@ export function TrendLineChart({
           ) : null}
         </Animated.View>
       </View>
+
       <Text style={styles.rangeHint}>{rangeLabel}</Text>
     </View>
   );
