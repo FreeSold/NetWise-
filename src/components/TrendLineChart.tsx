@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Line, Path, Rect } from "react-native-svg";
 import {
@@ -17,7 +17,8 @@ import type { TrendLineChartProps } from "./trendLineChart/types";
 
 export type { TrendLineChartProps };
 
-export function TrendLineChart({
+export const TrendLineChart = memo(
+  function TrendLineChart({
   points,
   chartTooltipOpacity = 1,
   breakdownByClass,
@@ -486,4 +487,12 @@ export function TrendLineChart({
       <Text style={styles.rangeHint}>{rangeLabel}</Text>
     </View>
   );
-}
+}, (prevProps, nextProps) => {
+  // 仅数据变化时重渲染，皮肤切换不触发折线图重绘
+  return (
+    prevProps.points === nextProps.points &&
+    prevProps.breakdownByClass === nextProps.breakdownByClass &&
+    prevProps.primarySeriesLabel === nextProps.primarySeriesLabel &&
+    prevProps.chartTooltipOpacity === nextProps.chartTooltipOpacity
+  );
+});

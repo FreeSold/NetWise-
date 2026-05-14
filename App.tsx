@@ -1931,179 +1931,179 @@ export default function App() {
           </Pressable>
         </View>
 
-        {/* 资产视图 */}
-        {mainView === "asset" ? (
-        <>
-        <View style={[styles.heroCard, { backgroundColor: assetSkin.heroCardBg }]}>
-          <View style={styles.heroTopRow}>
-            <Text style={[styles.heroHint, { color: assetSkin.heroHintColor }]}>{labels.heroTotalHint}</Text>
-            <View style={styles.heroActions}>
-              <Pressable style={[styles.manageButton, modulePressOpacityStyle()]} onPress={() => setManageVisible(true)}>
-                <Text style={styles.manageButtonText}>{labels.importButton}</Text>
-              </Pressable>
-              <Pressable style={[styles.settingsGearButton, modulePressOpacityStyle()]} onPress={() => setSettingsVisible(true)}>
-                <Text style={styles.settingsGearText}>⚙</Text>
-              </Pressable>
-            </View>
-          </View>
-          <Text style={[styles.heroTotal, { color: "white" }]}>{formatDisplayAmount(dailySummary.total)}</Text>
-          {dbInitError ? <Text style={styles.heroError}>{fmt.heroDbErrorLine(dbInitError)}</Text> : null}
-          <View style={styles.quickStatsColumn}>
-            <View style={styles.quickStatRow}>
-              <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatCash}</Text>
-                <Text style={[styles.quickStatValue, { color: "white" }]}>{cashAmount.toFixed(2)}</Text>
+        <View style={{ position: "relative" }}>
+          {/* 资产视图（始终渲染，通过 viewHidden 切换可见性，避免 SVG 组件销毁重建） */}
+          <View style={mainView === "asset" ? undefined : styles.viewHidden}>
+            <View style={[styles.heroCard, { backgroundColor: assetSkin.heroCardBg }]}>
+              <View style={styles.heroTopRow}>
+                <Text style={[styles.heroHint, { color: assetSkin.heroHintColor }]}>{labels.heroTotalHint}</Text>
+                <View style={styles.heroActions}>
+                  <Pressable style={[styles.manageButton, modulePressOpacityStyle()]} onPress={() => setManageVisible(true)}>
+                    <Text style={styles.manageButtonText}>{labels.importButton}</Text>
+                  </Pressable>
+                  <Pressable style={[styles.settingsGearButton, modulePressOpacityStyle()]} onPress={() => setSettingsVisible(true)}>
+                    <Text style={styles.settingsGearText}>⚙</Text>
+                  </Pressable>
+                </View>
               </View>
-              <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatFund}</Text>
-                <Text style={[styles.quickStatValue, { color: "white" }]}>{fundAmount.toFixed(2)}</Text>
-              </View>
-              <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatInsurance}</Text>
-                <Text style={[styles.quickStatValue, { color: "white" }]}>{insuranceAmount.toFixed(2)}</Text>
-              </View>
-            </View>
-            <View style={styles.quickStatRow}>
-              <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatStock}</Text>
-                <Text style={[styles.quickStatValue, { color: "white" }]}>{stockAmount.toFixed(2)}</Text>
-              </View>
-              <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatWealth}</Text>
-                <Text style={[styles.quickStatValue, { color: "white" }]}>{wealthManagementAmount.toFixed(2)}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        <View
-          collapsable={false}
-          style={[
-            styles.card,
-            { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
-            trendCardMenuLiftStyle("trend-main")
-          ]}
-        >
-          <TrendLineChart
-            points={trendPoints}
-            breakdownByClass={mainTrendBreakdown}
-            primarySeriesLabel={labels.chartPrimaryAll}
-            chartTooltipOpacity={moduleControlOpacity}
-            renderChartHeader={() => (
-              <View style={styles.trendHeaderRow}>
-                <View style={styles.trendHeaderTitleCluster}>
-                  <View style={styles.cardTitleHintRow}>
-                    <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
-                      {labels.trendMainChartTitle}
-                    </Text>
-                    {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
+              <Text style={[styles.heroTotal, { color: "white" }]}>{formatDisplayAmount(dailySummary.total)}</Text>
+              {dbInitError ? <Text style={styles.heroError}>{fmt.heroDbErrorLine(dbInitError)}</Text> : null}
+              <View style={styles.quickStatsColumn}>
+                <View style={styles.quickStatRow}>
+                  <View style={styles.quickStatItem}>
+                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatCash}</Text>
+                    <Text style={[styles.quickStatValue, { color: "white" }]}>{cashAmount.toFixed(2)}</Text>
+                  </View>
+                  <View style={styles.quickStatItem}>
+                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatFund}</Text>
+                    <Text style={[styles.quickStatValue, { color: "white" }]}>{fundAmount.toFixed(2)}</Text>
+                  </View>
+                  <View style={styles.quickStatItem}>
+                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatInsurance}</Text>
+                    <Text style={[styles.quickStatValue, { color: "white" }]}>{insuranceAmount.toFixed(2)}</Text>
                   </View>
                 </View>
-                {renderTrendTypePicker("trend-main")}
-              </View>
-            )}
-          />
-          {debugJsonDumpsVisible ? (
-            <>
-              <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
-              {renderDebugJsonScroll(trendChartsStructureDebugText.trendMain)}
-            </>
-          ) : null}
-        </View>
-
-        {visiblePlatformModules.map((platform) => (
-          <View
-            key={platform}
-            collapsable={false}
-            style={[
-              styles.card,
-              { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
-              trendCardMenuLiftStyle(`platform-${platform}`)
-            ]}
-          >
-            <TrendLineChart
-              points={platformTrendPoints[platform]}
-              breakdownByClass={platformTrendBreakdown[platform]}
-              primarySeriesLabel={labels.chartPrimaryAll}
-              chartTooltipOpacity={moduleControlOpacity}
-              renderChartHeader={() => (
-                <View style={styles.trendHeaderRow}>
-                  <View style={styles.trendHeaderTitleCluster}>
-                    <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
-                      {PLATFORM_TREND_LABEL[platform]}
-                    </Text>
+                <View style={styles.quickStatRow}>
+                  <View style={styles.quickStatItem}>
+                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatStock}</Text>
+                    <Text style={[styles.quickStatValue, { color: "white" }]}>{stockAmount.toFixed(2)}</Text>
                   </View>
-                  {renderTrendTypePicker(`platform-${platform}`)}
+                  <View style={styles.quickStatItem}>
+                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatWealth}</Text>
+                    <Text style={[styles.quickStatValue, { color: "white" }]}>{wealthManagementAmount.toFixed(2)}</Text>
+                  </View>
                 </View>
-              )}
-            />
-            {debugJsonDumpsVisible ? (
-              <>
-                <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
-                {renderDebugJsonScroll(
-                  platform === "alipay"
-                    ? trendChartsStructureDebugText.platformAlipay
-                    : platform === "cmb"
-                      ? trendChartsStructureDebugText.platformCmb
-                      : trendChartsStructureDebugText.platformWechat
+              </View>
+            </View>
+
+            <View
+              collapsable={false}
+              style={[
+                styles.card,
+                { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
+                trendCardMenuLiftStyle("trend-main")
+              ]}
+            >
+              <TrendLineChart
+                points={trendPoints}
+                breakdownByClass={mainTrendBreakdown}
+                primarySeriesLabel={labels.chartPrimaryAll}
+                chartTooltipOpacity={moduleControlOpacity}
+                renderChartHeader={() => (
+                  <View style={styles.trendHeaderRow}>
+                    <View style={styles.trendHeaderTitleCluster}>
+                      <View style={styles.cardTitleHintRow}>
+                        <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                          {labels.trendMainChartTitle}
+                        </Text>
+                        {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
+                      </View>
+                    </View>
+                    {renderTrendTypePicker("trend-main")}
+                  </View>
                 )}
-              </>
-            ) : null}
+              />
+              {debugJsonDumpsVisible ? (
+                <>
+                  <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
+                  {renderDebugJsonScroll(trendChartsStructureDebugText.trendMain)}
+                </>
+              ) : null}
+            </View>
+
+            {visiblePlatformModules.map((platform) => (
+              <View
+                key={platform}
+                collapsable={false}
+                style={[
+                  styles.card,
+                  { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
+                  trendCardMenuLiftStyle(`platform-${platform}`)
+                ]}
+              >
+                <TrendLineChart
+                  points={platformTrendPoints[platform]}
+                  breakdownByClass={platformTrendBreakdown[platform]}
+                  primarySeriesLabel={labels.chartPrimaryAll}
+                  chartTooltipOpacity={moduleControlOpacity}
+                  renderChartHeader={() => (
+                    <View style={styles.trendHeaderRow}>
+                      <View style={styles.trendHeaderTitleCluster}>
+                        <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                          {PLATFORM_TREND_LABEL[platform]}
+                        </Text>
+                      </View>
+                      {renderTrendTypePicker(`platform-${platform}`)}
+                    </View>
+                  )}
+                />
+                {debugJsonDumpsVisible ? (
+                  <>
+                    <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
+                    {renderDebugJsonScroll(
+                      platform === "alipay"
+                        ? trendChartsStructureDebugText.platformAlipay
+                        : platform === "cmb"
+                          ? trendChartsStructureDebugText.platformCmb
+                          : trendChartsStructureDebugText.platformWechat
+                    )}
+                  </>
+                ) : null}
+              </View>
+            ))}
+            {visibleCustomRecognitionModules.map((m) => (
+              <View
+                key={m.id}
+                collapsable={false}
+                style={[
+                  styles.card,
+                  { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
+                  trendCardMenuLiftStyle(`cm-${m.id}`)
+                ]}
+              >
+                <TrendLineChart
+                  points={customModuleTrendPoints[m.id] ?? []}
+                  breakdownByClass={customModuleTrendBreakdown[m.id]}
+                  primarySeriesLabel={labels.chartPrimaryAll}
+                  chartTooltipOpacity={moduleControlOpacity}
+                  renderChartHeader={() => (
+                    <View style={styles.trendHeaderRow}>
+                      <View style={styles.trendHeaderTitleCluster}>
+                        <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                          {fmt.customModuleTrendTitle(m.displayName)}
+                        </Text>
+                      </View>
+                      {renderTrendTypePicker(`cm-${m.id}`)}
+                    </View>
+                  )}
+                />
+                {debugJsonDumpsVisible ? (
+                  <>
+                    <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
+                    {renderDebugJsonScroll(trendChartsStructureDebugText.customModules[m.id] ?? "{}")}
+                  </>
+                ) : null}
+              </View>
+            ))}
           </View>
-        ))}
-        {visibleCustomRecognitionModules.map((m) => (
-          <View
-            key={m.id}
-            collapsable={false}
-            style={[
-              styles.card,
-              { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
-              trendCardMenuLiftStyle(`cm-${m.id}`)
-            ]}
-          >
-            <TrendLineChart
-              points={customModuleTrendPoints[m.id] ?? []}
-              breakdownByClass={customModuleTrendBreakdown[m.id]}
-              primarySeriesLabel={labels.chartPrimaryAll}
-              chartTooltipOpacity={moduleControlOpacity}
-              renderChartHeader={() => (
-                <View style={styles.trendHeaderRow}>
-                  <View style={styles.trendHeaderTitleCluster}>
-                    <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
-                      {fmt.customModuleTrendTitle(m.displayName)}
-                    </Text>
-                  </View>
-                  {renderTrendTypePicker(`cm-${m.id}`)}
-                </View>
-              )}
+
+          {/* 账单视图（始终渲染，通过 viewHidden 切换可见性） */}
+          <View style={mainView === "bill" ? undefined : styles.viewHidden}>
+            <BillSummaryCard summary={billSummary} filter={billFilter} onFilterChange={setBillFilter} />
+            <BillListCard
+              entries={billEntries}
+              onEntryPress={(entry) => {
+                setSelectedBillEntry(entry);
+                setBillDetailVisible(true);
+              }}
             />
-            {debugJsonDumpsVisible ? (
-              <>
-                <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
-                {renderDebugJsonScroll(trendChartsStructureDebugText.customModules[m.id] ?? "{}")}
-              </>
-            ) : null}
+            <BillDetailModal
+              entry={selectedBillEntry}
+              visible={billDetailVisible}
+              onClose={() => setBillDetailVisible(false)}
+            />
           </View>
-        ))}
-        </>
-        ) : (
-        /* 账单视图 */
-        <>
-          <BillSummaryCard summary={billSummary} filter={billFilter} onFilterChange={setBillFilter} />
-          <BillListCard
-            entries={billEntries}
-            onEntryPress={(entry) => {
-              setSelectedBillEntry(entry);
-              setBillDetailVisible(true);
-            }}
-          />
-          <BillDetailModal
-            entry={selectedBillEntry}
-            visible={billDetailVisible}
-            onClose={() => setBillDetailVisible(false)}
-          />
-        </>
-        )}
+        </View>
       </ScrollView>
 
       {settingsVisible ? (

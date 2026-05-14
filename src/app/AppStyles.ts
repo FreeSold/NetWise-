@@ -111,9 +111,9 @@ export const styles = StyleSheet.create({
   heroCard: {
     backgroundColor: "#0b63c8",
     borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 12
   },
   heroTopRow: {
     flexDirection: "row",
@@ -126,8 +126,8 @@ export const styles = StyleSheet.create({
     gap: 8
   },
   manageButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: "rgba(255,255,255,0.16)"
   },
@@ -152,9 +152,9 @@ export const styles = StyleSheet.create({
   },
   heroTotal: {
     color: "white",
-    fontSize: 44,
+    fontSize: 38,
     fontWeight: "700",
-    lineHeight: 52
+    lineHeight: 46
   },
   heroError: {
     color: "#fecaca",
@@ -167,22 +167,23 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 6
+    gap: 8
   },
   quickStatItem: {
     flex: 1,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.10)",
     borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 8
+    paddingVertical: 7,
+    paddingHorizontal: 10
   },
   quickStatLabel: {
-    color: "#dbeafe",
-    fontSize: 11
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 11,
+    marginBottom: 2
   },
   quickStatValue: {
     color: "white",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700"
   },
   clearActionRow: {
@@ -1347,5 +1348,11 @@ export const styles = StyleSheet.create({
     color: "#64748b",
     fontSize: 15,
     fontWeight: "600"
+  },
+  viewHidden: {
+    position: "absolute",
+    width: "100%",
+    opacity: 0,
+    pointerEvents: "none"
   }
 });
