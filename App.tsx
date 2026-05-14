@@ -204,7 +204,7 @@ export default function App() {
     cardBg: assetDarkMode ? "#1e3a5f" : "rgba(255,255,255,0.86)",
     cardBorder: assetDarkMode ? "rgba(255,255,255,0.1)" : "#e2e8f0",
     cardTitleColor: assetDarkMode ? "white" : "#1e293b",
-    cardSubColor: assetDarkMode ? "#93c5fd" : "#64748b",
+    cardSubColor: assetDarkMode ? "#93c5fd" : "#334155",
     textPrimary: assetDarkMode ? "white" : "#1e293b",
     textSecondary: assetDarkMode ? "#94a3b8" : "#64748b",
     textAccent: assetDarkMode ? "#34d399" : "#059669",
@@ -1951,25 +1951,25 @@ export default function App() {
           <View style={styles.quickStatsColumn}>
             <View style={styles.quickStatRow}>
               <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatCash}</Text>
+                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatCash}</Text>
                 <Text style={[styles.quickStatValue, { color: "white" }]}>{cashAmount.toFixed(2)}</Text>
               </View>
               <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatFund}</Text>
+                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatFund}</Text>
                 <Text style={[styles.quickStatValue, { color: "white" }]}>{fundAmount.toFixed(2)}</Text>
               </View>
               <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatInsurance}</Text>
+                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatInsurance}</Text>
                 <Text style={[styles.quickStatValue, { color: "white" }]}>{insuranceAmount.toFixed(2)}</Text>
               </View>
             </View>
             <View style={styles.quickStatRow}>
               <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatStock}</Text>
+                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatStock}</Text>
                 <Text style={[styles.quickStatValue, { color: "white" }]}>{stockAmount.toFixed(2)}</Text>
               </View>
               <View style={styles.quickStatItem}>
-                <Text style={[styles.quickStatLabel, { color: assetSkin.cardSubColor }]}>{labels.quickStatWealth}</Text>
+                <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatWealth}</Text>
                 <Text style={[styles.quickStatValue, { color: "white" }]}>{wealthManagementAmount.toFixed(2)}</Text>
               </View>
             </View>
