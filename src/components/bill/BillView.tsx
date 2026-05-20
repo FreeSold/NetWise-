@@ -1,5 +1,5 @@
 import { Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { billStyles as styles } from "./billStyles";
 import {
   type BillEntry,
@@ -270,6 +270,55 @@ export function BillListCard({ entries, onEntryPress }: BillListCardProps) {
           </View>
         </Pressable>
       ))}
+    </View>
+  );
+}
+
+export type BillToolbarProps = {
+  onFilterPress: () => void;
+  onAddPress: () => void;
+  onSubmitPress: () => void;
+};
+
+export function BillToolbar({ onFilterPress, onAddPress, onSubmitPress }: BillToolbarProps) {
+  const [opacity, setOpacity] = useState(1);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const resetTimer = () => {
+    setOpacity(1);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setOpacity(0.3), 5000);
+  };
+
+  const handlePress = (cb: () => void) => {
+    resetTimer();
+    cb();
+  };
+
+  useEffect(() => {
+    resetTimer();
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return (
+    <View style={[styles.toolbarOuter, { opacity }]}>
+      <View
+        style={styles.toolbar}
+        onStartShouldSetResponder={() => { resetTimer(); return false; }}
+        onMoveShouldSetResponder={() => { resetTimer(); return false; }}
+      >
+        <Pressable style={styles.toolbarButton} onPress={() => handlePress(onFilterPress)}>
+          <Text style={styles.toolbarButtonText}>筛选</Text>
+        </Pressable>
+        <Pressable style={styles.toolbarAddButton} onPress={() => handlePress(onAddPress)}>
+          <Text style={styles.toolbarAddText}>+</Text>
+        </Pressable>
+        <Pressable style={styles.toolbarSubmitButton} onPress={() => handlePress(onSubmitPress)}>
+          <Text style={styles.toolbarSubmitText}>提交</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

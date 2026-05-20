@@ -76,7 +76,7 @@ import {
 } from "./src/storage/assetHistoryDb";
 import { queryBillSummary, queryBillEntries } from "./src/storage/billHistoryDb";
 import type { BillSummary, BillEntry } from "./src/storage/billHistoryDb";
-import { BillPage, BillSummaryCard, BillListCard, BillDetailModal, defaultBillFilter } from "./src/components/bill";
+import { BillPage, BillListCard, BillToolbar, BillDetailModal, BillFilterModal, defaultBillFilter } from "./src/components/bill";
 import type { BillFilter } from "./src/components/bill";
 import { loadCustomRecognitionModules, saveCustomRecognitionModules } from "./src/storage/customRecognitionModulesStore";
 import { loadOcrCustomRules, normalizeOcrRuleScreenScope, saveOcrCustomRules } from "./src/storage/ocrCustomRulesStore";
@@ -124,6 +124,7 @@ export default function App() {
   const [selectedBillEntry, setSelectedBillEntry] = useState<BillEntry | null>(null);
   const [billDetailVisible, setBillDetailVisible] = useState(false);
   const [billFilter, setBillFilter] = useState<BillFilter>(defaultBillFilter);
+  const [billFilterVisible, setBillFilterVisible] = useState(false);
   /** 资产页皮肤模式，true=暗色，false=明亮 */
   const [assetDarkMode, setAssetDarkMode] = useState(true);
   /** 各折线卡片独立的展示类型，key：trend-main / platform-alipay / platform-cmb / platform-wechat / cm-模块id */
@@ -1911,24 +1912,47 @@ export default function App() {
       </Modal>
 
       <ScrollView nestedScrollEnabled contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
-        {/* 资产/账单切换按钮 */}
+        {/* 资产/账单切换按钮 + 账单汇总（内嵌） */}
         <View style={styles.viewTabContainer}>
-          <Pressable
-            style={[styles.viewTabButton, mainView === "asset" ? styles.viewTabButtonActive : null]}
-            onPress={() => setMainView("asset")}
-          >
-            <Text style={[styles.viewTabButtonText, mainView === "asset" ? styles.viewTabButtonTextActive : null]}>
-              资产
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.viewTabButton, mainView === "bill" ? styles.viewTabButtonActive : null]}
-            onPress={() => setMainView("bill")}
-          >
-            <Text style={[styles.viewTabButtonText, mainView === "bill" ? styles.viewTabButtonTextActive : null]}>
-              账单
-            </Text>
-          </Pressable>
+          <View style={styles.viewTabRow}>
+            <Pressable
+              style={[styles.viewTabButton, mainView === "asset" ? styles.viewTabButtonActive : null]}
+              onPress={() => setMainView("asset")}
+            >
+              <Text style={[styles.viewTabButtonText, mainView === "asset" ? styles.viewTabButtonTextActive : null]}>
+                资产
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.viewTabButton, mainView === "bill" ? styles.viewTabButtonActive : null]}
+              onPress={() => setMainView("bill")}
+            >
+              <Text style={[styles.viewTabButtonText, mainView === "bill" ? styles.viewTabButtonTextActive : null]}>
+                账单
+              </Text>
+            </Pressable>
+          </View>
+          {mainView === "bill" ? (
+            <View style={styles.billTabSummary}>
+              <View style={styles.billTabSummaryRow}>
+                <Text style={styles.billTabSummaryHint}>账单汇总</Text>
+                <Pressable style={styles.filterButton} onPress={() => setBillFilterVisible(true)}>
+                  <Text style={styles.filterButtonText}>筛选</Text>
+                </Pressable>
+              </View>
+              <Text style={styles.billTabSummaryTotal}>{billSummary.balance.toFixed(2)}</Text>
+              <View style={styles.billTabStatRow}>
+                <View style={styles.billTabStatItem}>
+                  <Text style={styles.billTabStatLabel}>收入</Text>
+                  <Text style={[styles.billTabStatValue, { color: "#34d399" }]}>+{billSummary.totalIncome.toFixed(2)}</Text>
+                </View>
+                <View style={styles.billTabStatItem}>
+                  <Text style={styles.billTabStatLabel}>支出</Text>
+                  <Text style={[styles.billTabStatValue, { color: "#f87171" }]}>-{billSummary.totalExpense.toFixed(2)}</Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         <View style={{ position: "relative" }}>
@@ -2089,7 +2113,12 @@ export default function App() {
 
           {/* 账单视图（始终渲染，通过 viewHidden 切换可见性） */}
           <View style={mainView === "bill" ? undefined : styles.viewHidden}>
-            <BillSummaryCard summary={billSummary} filter={billFilter} onFilterChange={setBillFilter} />
+            <BillFilterModal
+              visible={billFilterVisible}
+              filter={billFilter}
+              onClose={() => setBillFilterVisible(false)}
+              onApply={(newFilter) => { setBillFilter(newFilter); setBillFilterVisible(false); }}
+            />
             <BillListCard
               entries={billEntries}
               onEntryPress={(entry) => {
@@ -2105,6 +2134,14 @@ export default function App() {
           </View>
         </View>
       </ScrollView>
+
+      {mainView === "bill" ? (
+        <BillToolbar
+          onFilterPress={() => {}}
+          onAddPress={() => {}}
+          onSubmitPress={() => {}}
+        />
+      ) : null}
 
       {settingsVisible ? (
         <SafeAreaView style={[styles.pageOverlay, { paddingTop: 16 + androidTopInset }]}>

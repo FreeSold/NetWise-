@@ -2,11 +2,9 @@ import { StyleSheet } from "react-native";
 
 export const billStyles = StyleSheet.create({
   heroCard: {
-    marginHorizontal: 16,
     marginTop: 8,
-    padding: 20,
-    borderRadius: 20,
-    backgroundColor: "#1e3a5f"
+    paddingHorizontal: 16,
+    paddingVertical: 8
   },
   heroTopRow: {
     flexDirection: "row",
@@ -76,7 +74,7 @@ export const billStyles = StyleSheet.create({
     fontWeight: "700"
   },
   card: {
-    marginHorizontal: 16,
+    marginHorizontal: -16,
     marginTop: 12,
     padding: 16,
     borderRadius: 16,
@@ -330,6 +328,63 @@ export const billStyles = StyleSheet.create({
     alignItems: "center"
   },
   filterApplyText: {
+    color: "white",
+    fontSize: 15,
+    fontWeight: "600"
+  },
+  toolbarOuter: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    paddingBottom: 20
+  },
+  toolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "white",
+    borderRadius: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    width: "92%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 8
+  },
+  toolbarButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16
+  },
+  toolbarButtonText: {
+    color: "#2563eb",
+    fontSize: 15,
+    fontWeight: "600"
+  },
+  toolbarAddButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#2563eb",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  toolbarAddText: {
+    color: "white",
+    fontSize: 20,
+    fontWeight: "700",
+    lineHeight: 24
+  },
+  toolbarSubmitButton: {
+    backgroundColor: "#2563eb",
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 20
+  },
+  toolbarSubmitText: {
     color: "white",
     fontSize: 15,
     fontWeight: "600"

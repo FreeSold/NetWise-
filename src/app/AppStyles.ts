@@ -74,10 +74,14 @@ export const styles = StyleSheet.create({
   },
   /** 资产/账单切换按钮容器 */
   viewTabContainer: {
-    flexDirection: "row",
     backgroundColor: "#e2e8f0",
-    borderRadius: 10,
+    borderRadius: 14,
     padding: 3,
+    gap: 6,
+    paddingBottom: 12
+  },
+  viewTabRow: {
+    flexDirection: "row",
     gap: 2
   },
   /** 切换按钮 */
@@ -101,6 +105,42 @@ export const styles = StyleSheet.create({
   viewTabButtonTextActive: {
     color: "white"
   },
+  /** 账单汇总内嵌在切换栏 */
+  billTabSummary: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 6
+  },
+  billTabSummaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between"
+  },
+  billTabSummaryHint: {
+    color: "#64748b",
+    fontSize: 13
+  },
+  billTabSummaryTotal: {
+    color: "#0b63c8",
+    fontSize: 32,
+    fontWeight: "700"
+  },
+  billTabStatRow: {
+    flexDirection: "row",
+    gap: 24
+  },
+  billTabStatItem: {
+    alignItems: "center",
+    gap: 2
+  },
+  billTabStatLabel: {
+    color: "#64748b",
+    fontSize: 11
+  },
+  billTabStatValue: {
+    fontSize: 16,
+    fontWeight: "700"
+  },
   /** 账单页占位文字 */
   billPlaceholderText: {
     color: "#94a3b8",
@@ -113,7 +153,8 @@ export const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    gap: 12
+    gap: 12,
+    marginBottom: 6
   },
   heroTopRow: {
     flexDirection: "row",
@@ -243,7 +284,8 @@ export const styles = StyleSheet.create({
   card: {
     borderRadius: 10,
     padding: 12,
-    gap: 8
+    gap: 8,
+    marginBottom: 6
   },
   cardTitle: {
     fontSize: 16,
