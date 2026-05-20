@@ -19,13 +19,13 @@ export const billStyles = StyleSheet.create({
   filterButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(147, 197, 253, 0.2)",
+    backgroundColor: "#334155",
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 16
+    borderRadius: 8
   },
   filterButtonText: {
-    color: "#93c5fd",
+    color: "white",
     fontSize: 13,
     fontWeight: "500"
   },
@@ -74,7 +74,7 @@ export const billStyles = StyleSheet.create({
     fontWeight: "700"
   },
   card: {
-    marginHorizontal: -16,
+    marginHorizontal: -20,
     marginTop: 12,
     padding: 16,
     borderRadius: 16,

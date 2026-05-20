@@ -5,7 +5,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { Picker } from "@react-native-picker/picker";
-import { Alert, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, Text, TextInput, View } from "react-native";
+import { Alert, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
 import { AppLockGate } from "./src/app/components/AppLockGate";
 import { styles } from "./src/app/AppStyles";
 import { formatOcrRuleScopeLabel } from "./src/app/formatOcrRuleScopeLabel";
@@ -41,6 +41,7 @@ import {
   type ParseResult
 } from "./src/domain/types";
 import { TrendLineChart } from "./src/components/TrendLineChart";
+import { BREAKDOWN_CLASS_LABEL, BREAKDOWN_LINE_COLORS } from "./src/components/trendLineChart/constants";
 import { recognizeTextFromImage } from "./src/ocr/ocrSpace";
 import { buildRuleSummary, formatDisplayAmount } from "./src/parsers/shared";
 import { parseOcrText } from "./src/parsers/templates";
@@ -125,6 +126,16 @@ export default function App() {
   const [billDetailVisible, setBillDetailVisible] = useState(false);
   const [billFilter, setBillFilter] = useState<BillFilter>(defaultBillFilter);
   const [billFilterVisible, setBillFilterVisible] = useState(false);
+  /** 每个折线卡片独立隐藏的资产类（key: trend-main / platform-xxx / cm-id），点击图例切换 */
+  const [hiddenClassesByModule, setHiddenClassesByModule] = useState<Record<string, Set<AssetClass>>>({});
+  const toggleHiddenClass = (moduleKey: string, ac: AssetClass) => {
+    setHiddenClassesByModule((prev) => {
+      const cur = prev[moduleKey] ?? new Set<AssetClass>();
+      const next = new Set(cur);
+      if (next.has(ac)) next.delete(ac); else next.add(ac);
+      return { ...prev, [moduleKey]: next };
+    });
+  };
   /** 资产页皮肤模式，true=暗色，false=明亮 */
   const [assetDarkMode, setAssetDarkMode] = useState(true);
   /** 各折线卡片独立的展示类型，key：trend-main / platform-alipay / platform-cmb / platform-wechat / cm-模块id */
@@ -211,7 +222,7 @@ export default function App() {
     textAccent: assetDarkMode ? "#34d399" : "#059669",
     chartLineColor: assetDarkMode ? "#2563eb" : "#2563eb",
     chartGridColor: assetDarkMode ? "rgba(255,255,255,0.1)" : "#f1f5f9",
-    chartTextColor: assetDarkMode ? "#94a3b8" : "#64748b",
+    chartTextColor: assetDarkMode ? "#93c5fd" : "#64748b",
     cardBgOpaque: assetDarkMode ? "#1e3a5f" : "white",
   };
   const cardBorderColor = assetDarkMode ? assetSkin.cardBorder : `rgba(226,232,240,${cardAlpha})`;
@@ -242,26 +253,21 @@ export default function App() {
   function renderTrendTypePicker(menuKey: string) {
     const menuOpen = trendMenuFor === menuKey;
     const selected = trendFilterForMenuKey(menuKey);
-    const darkStyle = assetDarkMode;
     return (
       <View style={styles.trendPickerArea}>
         <Pressable
-          style={[
-            styles.trendPickerWrap,
-            modulePressOpacityStyle(),
-            darkStyle && { backgroundColor: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.2)" }
-          ]}
+          style={[styles.trendPickerWrap, modulePressOpacityStyle()]}
           onPress={() => setTrendMenuFor((prev) => (prev === menuKey ? null : menuKey))}
         >
-          <Text style={[styles.trendPickerLabel, darkStyle && { color: "white" }]}>{TREND_FILTER_LABEL[selected]}</Text>
-          <Text style={[styles.trendPickerArrow, darkStyle && { color: "#93c5fd" }]}>▼</Text>
+          <Text style={styles.trendPickerLabel}>{TREND_FILTER_LABEL[selected]}</Text>
+          <Text style={styles.trendPickerArrow}>▼</Text>
         </Pressable>
         {menuOpen ? (
-          <View style={[styles.trendDropdownMenu, modulePressOpacityStyle(), darkStyle && { backgroundColor: "#1e3a5f", borderColor: "rgba(255,255,255,0.2)" }]}>
+          <View style={[styles.trendDropdownMenu, modulePressOpacityStyle()]}>
             {TREND_FILTER_ORDER.map((f) => (
               <Pressable
                 key={f}
-                style={[styles.trendDropdownItem, f === selected ? styles.trendDropdownItemActive : null, darkStyle && f === selected && { backgroundColor: "rgba(59,130,246,0.4)" }]}
+                style={[styles.trendDropdownItem, f === selected ? styles.trendDropdownItemActive : null]}
                 onPress={() => {
                   setTrendFiltersByModule((prev) => {
                     const cur = prev[menuKey] ?? "all";
@@ -276,8 +282,7 @@ export default function App() {
                 <Text
                   style={[
                     styles.trendDropdownItemText,
-                    f === selected ? styles.trendDropdownItemTextActive : null,
-                    darkStyle && { color: "white" }
+                    f === selected ? styles.trendDropdownItemTextActive : null
                   ]}
                 >
                   {TREND_FILTER_LABEL[f]}
@@ -1913,7 +1918,7 @@ export default function App() {
 
       <ScrollView nestedScrollEnabled contentContainerStyle={[styles.content, { paddingTop: 16 + androidTopInset }]}>
         {/* 资产/账单切换按钮 + 账单汇总（内嵌） */}
-        <View style={styles.viewTabContainer}>
+        <View style={[styles.viewTabContainer, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
           <View style={styles.viewTabRow}>
             <Pressable
               style={[styles.viewTabButton, mainView === "asset" ? styles.viewTabButtonActive : null]}
@@ -1935,7 +1940,7 @@ export default function App() {
           {mainView === "bill" ? (
             <View style={styles.billTabSummary}>
               <View style={styles.billTabSummaryRow}>
-                <Text style={styles.billTabSummaryHint}>账单汇总</Text>
+                <Text style={[styles.billTabSummaryHint, assetDarkMode && { color: "#93c5fd" }]}>账单汇总</Text>
                 <Pressable style={styles.filterButton} onPress={() => setBillFilterVisible(true)}>
                   <Text style={styles.filterButtonText}>筛选</Text>
                 </Pressable>
@@ -1943,24 +1948,19 @@ export default function App() {
               <Text style={styles.billTabSummaryTotal}>{billSummary.balance.toFixed(2)}</Text>
               <View style={styles.billTabStatRow}>
                 <View style={styles.billTabStatItem}>
-                  <Text style={styles.billTabStatLabel}>收入</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>收入</Text>
                   <Text style={[styles.billTabStatValue, { color: "#34d399" }]}>+{billSummary.totalIncome.toFixed(2)}</Text>
                 </View>
                 <View style={styles.billTabStatItem}>
-                  <Text style={styles.billTabStatLabel}>支出</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>支出</Text>
                   <Text style={[styles.billTabStatValue, { color: "#f87171" }]}>-{billSummary.totalExpense.toFixed(2)}</Text>
                 </View>
               </View>
             </View>
-          ) : null}
-        </View>
-
-        <View style={{ position: "relative" }}>
-          {/* 资产视图（始终渲染，通过 viewHidden 切换可见性，避免 SVG 组件销毁重建） */}
-          <View style={mainView === "asset" ? undefined : styles.viewHidden}>
-            <View style={[styles.heroCard, { backgroundColor: assetSkin.heroCardBg }]}>
-              <View style={styles.heroTopRow}>
-                <Text style={[styles.heroHint, { color: assetSkin.heroHintColor }]}>{labels.heroTotalHint}</Text>
+          ) : (
+            <View style={styles.billTabSummary}>
+              <View style={styles.billTabSummaryRow}>
+                <Text style={[styles.billTabSummaryHint, assetDarkMode && { color: "#93c5fd" }]}>{labels.heroTotalHint}</Text>
                 <View style={styles.heroActions}>
                   <Pressable style={[styles.manageButton, modulePressOpacityStyle()]} onPress={() => setManageVisible(true)}>
                     <Text style={styles.manageButtonText}>{labels.importButton}</Text>
@@ -1970,107 +1970,144 @@ export default function App() {
                   </Pressable>
                 </View>
               </View>
-              <Text style={[styles.heroTotal, { color: "white" }]}>{formatDisplayAmount(dailySummary.total)}</Text>
+              <Text style={styles.billTabSummaryTotal}>{formatDisplayAmount(dailySummary.total)}</Text>
               {dbInitError ? <Text style={styles.heroError}>{fmt.heroDbErrorLine(dbInitError)}</Text> : null}
-              <View style={styles.quickStatsColumn}>
-                <View style={styles.quickStatRow}>
-                  <View style={styles.quickStatItem}>
-                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatCash}</Text>
-                    <Text style={[styles.quickStatValue, { color: "white" }]}>{cashAmount.toFixed(2)}</Text>
-                  </View>
-                  <View style={styles.quickStatItem}>
-                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatFund}</Text>
-                    <Text style={[styles.quickStatValue, { color: "white" }]}>{fundAmount.toFixed(2)}</Text>
-                  </View>
-                  <View style={styles.quickStatItem}>
-                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatInsurance}</Text>
-                    <Text style={[styles.quickStatValue, { color: "white" }]}>{insuranceAmount.toFixed(2)}</Text>
-                  </View>
+              <View style={styles.billTabStatRow}>
+                <View style={styles.billTabStatItem}>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatCash}</Text>
+                  <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.cash }]}>{formatDisplayAmount(cashAmount)}</Text>
                 </View>
-                <View style={styles.quickStatRow}>
-                  <View style={styles.quickStatItem}>
-                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatStock}</Text>
-                    <Text style={[styles.quickStatValue, { color: "white" }]}>{stockAmount.toFixed(2)}</Text>
-                  </View>
-                  <View style={styles.quickStatItem}>
-                    <Text style={[styles.quickStatLabel, { color: "white" }]}>{labels.quickStatWealth}</Text>
-                    <Text style={[styles.quickStatValue, { color: "white" }]}>{wealthManagementAmount.toFixed(2)}</Text>
+                <View style={styles.billTabStatItem}>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatFund}</Text>
+                  <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.fund }]}>{formatDisplayAmount(fundAmount)}</Text>
+                </View>
+                <View style={styles.billTabStatItem}>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatInsurance}</Text>
+                  <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.insurance }]}>{formatDisplayAmount(insuranceAmount)}</Text>
+                </View>
+              </View>
+              <View style={styles.billTabStatRow}>
+                <View style={styles.billTabStatItem}>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatStock}</Text>
+                  <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.stock }]}>{formatDisplayAmount(stockAmount)}</Text>
+                </View>
+                <View style={styles.billTabStatItem}>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatWealth}</Text>
+                  <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.wealth_management }]}>{formatDisplayAmount(wealthManagementAmount)}</Text>
+                </View>
+                <View style={styles.billTabStatItem} />
+              </View>
+            </View>
+          )}
+        </View>
+
+        <View style={{ position: "relative" }}>
+          {/* 资产视图（始终渲染，通过 viewHidden 切换可见性，避免 SVG 组件销毁重建） */}
+          <View style={mainView === "asset" ? undefined : styles.viewHidden}>
+        <View
+          collapsable={false}
+          style={[
+            styles.card,
+            { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
+            trendCardMenuLiftStyle("trend-main")
+          ]}
+        >
+          <TrendLineChart
+            points={trendPoints}
+            breakdownByClass={mainTrendBreakdown}
+                primarySeriesLabel={labels.chartPrimaryAll}
+            chartTooltipOpacity={moduleControlOpacity}
+            chartTextColor={assetSkin.chartTextColor}
+            hiddenClasses={hiddenClassesByModule["trend-main"]}
+            renderChartHeader={() => (
+              <View>
+                <View style={styles.trendHeaderRow}>
+                  <View style={styles.trendHeaderTitleCluster}>
+                  <View style={styles.cardTitleHintRow}>
+                    <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                      {labels.trendMainChartTitle}
+                    </Text>
+                    {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
                   </View>
                 </View>
               </View>
-            </View>
+                {mainTrendBreakdown?.length ? (
+                  <View style={{ flexDirection: "row", gap: 14, marginTop: 2, flexWrap: "wrap" }}>
+                    {mainTrendBreakdown.map((ser) => {
+                      const hidden = hiddenClassesByModule["trend-main"]?.has(ser.assetClass);
+                      return (
+                        <Pressable key={ser.assetClass} onPress={() => toggleHiddenClass("trend-main", ser.assetClass)} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: hidden ? "#475569" : BREAKDOWN_LINE_COLORS[ser.assetClass] }} />
+                          <Text style={{ fontSize: 11, color: hidden ? "#475569" : assetSkin.chartTextColor, textDecorationLine: hidden ? "line-through" : "none" }}>{BREAKDOWN_CLASS_LABEL[ser.assetClass]}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : null}
+              </View>
+            )}
+          />
+          {debugJsonDumpsVisible ? (
+            <>
+              <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
+              {renderDebugJsonScroll(trendChartsStructureDebugText.trendMain)}
+            </>
+          ) : null}
+        </View>
 
-            <View
-              collapsable={false}
-              style={[
-                styles.card,
-                { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
-                trendCardMenuLiftStyle("trend-main")
-              ]}
-            >
-              <TrendLineChart
-                points={trendPoints}
-                breakdownByClass={mainTrendBreakdown}
-                primarySeriesLabel={labels.chartPrimaryAll}
-                chartTooltipOpacity={moduleControlOpacity}
-                renderChartHeader={() => (
+        {visiblePlatformModules.map((platform) => (
+          <View
+            key={platform}
+            collapsable={false}
+            style={[
+              styles.card,
+              { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
+              trendCardMenuLiftStyle(`platform-${platform}`)
+            ]}
+          >
+            <TrendLineChart
+              points={platformTrendPoints[platform]}
+              breakdownByClass={platformTrendBreakdown[platform]}
+              primarySeriesLabel={labels.chartPrimaryAll}
+              chartTooltipOpacity={moduleControlOpacity}
+              chartTextColor={assetSkin.chartTextColor}
+              hiddenClasses={hiddenClassesByModule[`platform-${platform}`]}
+              renderChartHeader={() => (
+                <View>
                   <View style={styles.trendHeaderRow}>
                     <View style={styles.trendHeaderTitleCluster}>
-                      <View style={styles.cardTitleHintRow}>
-                        <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
-                          {labels.trendMainChartTitle}
-                        </Text>
-                        {renderModuleInfoIcon(labels.trendMainChartTitle, MODULE_HINT_TEXT.trendChart, true)}
-                      </View>
+                      <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                        {PLATFORM_TREND_LABEL[platform]}
+                      </Text>
                     </View>
-                    {renderTrendTypePicker("trend-main")}
                   </View>
-                )}
-              />
-              {debugJsonDumpsVisible ? (
-                <>
-                  <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
-                  {renderDebugJsonScroll(trendChartsStructureDebugText.trendMain)}
-                </>
-              ) : null}
-            </View>
-
-            {visiblePlatformModules.map((platform) => (
-              <View
-                key={platform}
-                collapsable={false}
-                style={[
-                  styles.card,
-                  { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
-                  trendCardMenuLiftStyle(`platform-${platform}`)
-                ]}
-              >
-                <TrendLineChart
-                  points={platformTrendPoints[platform]}
-                  breakdownByClass={platformTrendBreakdown[platform]}
-                  primarySeriesLabel={labels.chartPrimaryAll}
-                  chartTooltipOpacity={moduleControlOpacity}
-                  renderChartHeader={() => (
-                    <View style={styles.trendHeaderRow}>
-                      <View style={styles.trendHeaderTitleCluster}>
-                        <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
-                          {PLATFORM_TREND_LABEL[platform]}
-                        </Text>
-                      </View>
-                      {renderTrendTypePicker(`platform-${platform}`)}
+                  {platformTrendBreakdown[platform]?.length ? (
+                    <View style={{ flexDirection: "row", gap: 14, marginTop: 2, flexWrap: "wrap" }}>
+                      {platformTrendBreakdown[platform].map((ser) => {
+                        const k = `platform-${platform}`;
+                        const hidden = hiddenClassesByModule[k]?.has(ser.assetClass);
+                        return (
+                          <Pressable key={ser.assetClass} onPress={() => toggleHiddenClass(k, ser.assetClass)} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: hidden ? "#475569" : BREAKDOWN_LINE_COLORS[ser.assetClass] }} />
+                            <Text style={{ fontSize: 11, color: hidden ? "#475569" : assetSkin.chartTextColor, textDecorationLine: hidden ? "line-through" : "none" }}>{BREAKDOWN_CLASS_LABEL[ser.assetClass]}</Text>
+                          </Pressable>
+                        );
+                      })}
                     </View>
-                  )}
-                />
-                {debugJsonDumpsVisible ? (
-                  <>
-                    <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
-                    {renderDebugJsonScroll(
-                      platform === "alipay"
-                        ? trendChartsStructureDebugText.platformAlipay
-                        : platform === "cmb"
-                          ? trendChartsStructureDebugText.platformCmb
-                          : trendChartsStructureDebugText.platformWechat
-                    )}
+                  ) : null}
+                </View>
+              )}
+            />
+            {debugJsonDumpsVisible ? (
+              <>
+                <Text style={styles.debugDumpLabel}>{labels.debugTrendDumpTitle}</Text>
+                {renderDebugJsonScroll(
+                  platform === "alipay"
+                    ? trendChartsStructureDebugText.platformAlipay
+                    : platform === "cmb"
+                      ? trendChartsStructureDebugText.platformCmb
+                      : trendChartsStructureDebugText.platformWechat
+                )}
                   </>
                 ) : null}
               </View>
@@ -2079,27 +2116,44 @@ export default function App() {
               <View
                 key={m.id}
                 collapsable={false}
-                style={[
-                  styles.card,
-                  { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
-                  trendCardMenuLiftStyle(`cm-${m.id}`)
-                ]}
-              >
-                <TrendLineChart
-                  points={customModuleTrendPoints[m.id] ?? []}
+            style={[
+              styles.card,
+              { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, borderColor: cardBorderColor, borderWidth: assetDarkMode ? 0 : 1 },
+              trendCardMenuLiftStyle(`cm-${m.id}`)
+            ]}
+          >
+            <TrendLineChart
+              points={customModuleTrendPoints[m.id] ?? []}
                   breakdownByClass={customModuleTrendBreakdown[m.id]}
                   primarySeriesLabel={labels.chartPrimaryAll}
-                  chartTooltipOpacity={moduleControlOpacity}
-                  renderChartHeader={() => (
-                    <View style={styles.trendHeaderRow}>
-                      <View style={styles.trendHeaderTitleCluster}>
-                        <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
-                          {fmt.customModuleTrendTitle(m.displayName)}
-                        </Text>
-                      </View>
-                      {renderTrendTypePicker(`cm-${m.id}`)}
+              chartTooltipOpacity={moduleControlOpacity}
+              chartTextColor={assetSkin.chartTextColor}
+              hiddenClasses={hiddenClassesByModule[`cm-${m.id}`]}
+              renderChartHeader={() => (
+                <View>
+                  <View style={styles.trendHeaderRow}>
+                    <View style={styles.trendHeaderTitleCluster}>
+                      <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]} numberOfLines={1}>
+                        {fmt.customModuleTrendTitle(m.displayName)}
+                      </Text>
                     </View>
-                  )}
+                  </View>
+                  {customModuleTrendBreakdown[m.id]?.length ? (
+                    <View style={{ flexDirection: "row", gap: 14, marginTop: 2, flexWrap: "wrap" }}>
+                      {customModuleTrendBreakdown[m.id].map((ser) => {
+                        const k = `cm-${m.id}`;
+                        const hidden = hiddenClassesByModule[k]?.has(ser.assetClass);
+                        return (
+                          <Pressable key={ser.assetClass} onPress={() => toggleHiddenClass(k, ser.assetClass)} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: hidden ? "#475569" : BREAKDOWN_LINE_COLORS[ser.assetClass] }} />
+                            <Text style={{ fontSize: 11, color: hidden ? "#475569" : assetSkin.chartTextColor, textDecorationLine: hidden ? "line-through" : "none" }}>{BREAKDOWN_CLASS_LABEL[ser.assetClass]}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
+              )}
                 />
                 {debugJsonDumpsVisible ? (
                   <>

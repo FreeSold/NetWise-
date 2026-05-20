@@ -2,11 +2,11 @@ import type { AssetClass } from "../../domain/types";
 
 /** 分项折线：赤、橙、黄、绿、青（与资产类固定对应）；紫色未使用 */
 export const BREAKDOWN_LINE_COLORS: Record<AssetClass, string> = {
-  cash: "#dc2626",
-  fund: "#ea580c",
-  insurance: "#ca8a04",
-  stock: "#16a34a",
-  wealth_management: "#06b6d4"
+  cash: "#EF4444",
+  fund: "#F59E0B",
+  insurance: "#EAB308",
+  stock: "#10B981",
+  wealth_management: "#06B6D4"
 };
 
 export const BREAKDOWN_CLASS_LABEL: Record<AssetClass, string> = {

@@ -68,13 +68,12 @@ export const styles = StyleSheet.create({
     fontWeight: "700"
   },
   content: {
-    gap: 12,
-    padding: 16,
+    gap: 16,
+    padding: 20,
     overflow: "visible"
   },
   /** 资产/账单切换按钮容器 */
   viewTabContainer: {
-    backgroundColor: "#e2e8f0",
     borderRadius: 14,
     padding: 3,
     gap: 6,
@@ -97,7 +96,7 @@ export const styles = StyleSheet.create({
   },
   /** 切换按钮文字 */
   viewTabButtonText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "600",
     color: "#64748b"
   },
@@ -109,7 +108,7 @@ export const styles = StyleSheet.create({
   billTabSummary: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    gap: 6
+    gap: 16
   },
   billTabSummaryRow: {
     flexDirection: "row",
@@ -122,7 +121,7 @@ export const styles = StyleSheet.create({
   },
   billTabSummaryTotal: {
     color: "#0b63c8",
-    fontSize: 32,
+    fontSize: 48,
     fontWeight: "700"
   },
   billTabStatRow: {
@@ -130,16 +129,33 @@ export const styles = StyleSheet.create({
     gap: 24
   },
   billTabStatItem: {
-    alignItems: "center",
-    gap: 2
+    flex: 1,
+    gap: 8,
+    alignItems: "flex-start"
   },
   billTabStatLabel: {
-    color: "#64748b",
-    fontSize: 11
+    color: "#94A3B8",
+    fontSize: 12
   },
   billTabStatValue: {
-    fontSize: 16,
-    fontWeight: "700"
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1e293b"
+  },
+  /** 账单页占位文字 */
+  /** 账单页筛选按钮 */
+  filterButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#334155",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8
+  },
+  filterButtonText: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "500"
   },
   /** 账单页占位文字 */
   billPlaceholderText: {
@@ -169,23 +185,24 @@ export const styles = StyleSheet.create({
   manageButton: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.16)"
+    borderRadius: 8,
+    backgroundColor: "#334155"
   },
   manageButtonText: {
     color: "white",
-    fontSize: 12,
-    fontWeight: "700"
+    fontSize: 13,
+    fontWeight: "500"
   },
   settingsGearButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.16)"
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#334155"
   },
   settingsGearText: {
     color: "white",
-    fontSize: 16
+    fontSize: 16,
+    textAlignVertical: "center"
   },
   heroHint: {
     color: "#bfdbfe",
@@ -282,10 +299,11 @@ export const styles = StyleSheet.create({
     fontWeight: "700"
   },
   card: {
+    marginHorizontal: -20,
     borderRadius: 10,
-    padding: 12,
+    padding: 20,
     gap: 8,
-    marginBottom: 6
+    marginBottom: 1
   },
   cardTitle: {
     fontSize: 16,
@@ -786,8 +804,8 @@ export const styles = StyleSheet.create({
     justifyContent: "space-between",
     borderWidth: 1,
     borderColor: "#bfdbfe",
-    borderRadius: 999,
-    backgroundColor: "#eff6ff",
+    borderRadius: 8,
+    backgroundColor: "#334155",
     width: 110,
     height: 34,
     paddingHorizontal: 12
@@ -802,13 +820,14 @@ export const styles = StyleSheet.create({
     zIndex: 10
   },
   trendPickerLabel: {
-    color: "#1d4ed8",
+    color: "white",
     fontSize: 12,
     fontWeight: "600"
   },
   trendPickerArrow: {
-    color: "#1d4ed8",
-    fontSize: 10
+    color: "rgba(255,255,255,0.6)",
+    fontSize: 10,
+    lineHeight: 12
   },
   trendHeaderRow: {
     flexDirection: "row",
@@ -825,9 +844,9 @@ export const styles = StyleSheet.create({
     /** 低于折线图金额浮窗（chartStyles 内 tooltipCluster elevation=50），避免挡住预览气泡 */
     elevation: 8,
     borderWidth: 1,
-    borderColor: "#bfdbfe",
-    borderRadius: 14,
-    backgroundColor: "#eff6ff",
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 8,
+    backgroundColor: "#1E293B",
     overflow: "hidden"
   },
   trendDropdownItem: {
@@ -835,10 +854,10 @@ export const styles = StyleSheet.create({
     paddingVertical: 10
   },
   trendDropdownItemActive: {
-    backgroundColor: "#dbeafe"
+    backgroundColor: "rgba(59,130,246,0.3)"
   },
   trendDropdownItemText: {
-    color: "#1d4ed8",
+    color: "white",
     fontSize: 13
   },
   trendDropdownItemTextActive: {

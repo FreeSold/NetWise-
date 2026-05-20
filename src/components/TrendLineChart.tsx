@@ -23,7 +23,9 @@ export const TrendLineChart = memo(
   chartTooltipOpacity = 1,
   breakdownByClass,
   primarySeriesLabel = "全部",
-  renderChartHeader
+  renderChartHeader,
+  chartTextColor,
+  hiddenClasses
 }: TrendLineChartProps) {
   const [width, setWidth] = useState(320);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -250,7 +252,7 @@ export const TrendLineChart = memo(
                   width={band.width}
                   height={band.height}
                   fill={band.fill}
-                  opacity={0.5}
+                  opacity={0.1}
                 />
               ))}
               {computed.ticks.map((tick, idx) => {
@@ -263,7 +265,7 @@ export const TrendLineChart = memo(
                     y1={y}
                     x2={computed.plotW}
                     y2={y}
-                    stroke="#dbeafe"
+                    stroke="#475569"
                     strokeWidth={1}
                   />
                 );
@@ -282,19 +284,21 @@ export const TrendLineChart = memo(
             ]}
           >
             <Svg width={computed.bufferScrollW} height={computed.plotInnerH} pointerEvents="none">
-              {computed.breakdownPaths.map((layer) => (
+              {computed.breakdownPaths
+                .filter((layer) => !hiddenClasses?.has(layer.assetClass))
+                .map((layer) => (
                 <Path
                   key={layer.key}
                   d={layer.d}
                   stroke={layer.color}
-                  strokeWidth={1.5}
+                  strokeWidth={2.5}
                   fill="none"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   opacity={0.92}
                 />
               ))}
-              <Path d={computed.path} stroke="#2563eb" strokeWidth={2} fill="none" />
+              <Path d={computed.path} stroke="#2563eb" strokeWidth={3} fill="none" />
             </Svg>
             <View style={styles.panLayer} {...panResponder.panHandlers} accessibilityLabel="横向拖动查看历史数据">
               <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedDate(null)} accessibilityRole="button" />
@@ -352,7 +356,7 @@ export const TrendLineChart = memo(
                 return (
                   <Text
                     key={`xlabel-txt-${dot.date}-${index}`}
-                    style={[styles.xLabelText, { left, top: 0, width: X_LABEL_SLOT_W, textAlign: "center" }]}
+                    style={[styles.xLabelText, chartTextColor ? { color: chartTextColor } : null, { left, top: 0, width: X_LABEL_SLOT_W, textAlign: "center" }]}
                     numberOfLines={1}
                   >
                     {dot.date.slice(5)}
@@ -363,33 +367,13 @@ export const TrendLineChart = memo(
           </View>
         ) : null}
 
-        <View style={[styles.chartAxisFrameLayer, { width, height }]} pointerEvents="none">
-          <Svg width={width} height={height}>
-            <Line
-              x1={computed.chartLeft}
-              y1={paddingY}
-              x2={computed.chartLeft}
-              y2={height - paddingY}
-              stroke="#b7d4fb"
-              strokeWidth={1}
-            />
-            <Line
-              x1={computed.chartLeft}
-              y1={height - paddingY}
-              x2={computed.chartRight}
-              y2={height - paddingY}
-              stroke="#b7d4fb"
-              strokeWidth={1}
-            />
-          </Svg>
-        </View>
-
         <View style={[styles.chartYTickLabelsLayer, { width, height }]} pointerEvents="none">
           {computed.yTickLayouts.map((row) => (
             <Text
               key={row.key}
               style={[
                 styles.yTickLabelText,
+                chartTextColor ? { color: chartTextColor } : null,
                 {
                   top: row.top,
                   width: Math.max(24, computed.chartLeft - 6)
@@ -452,13 +436,11 @@ export const TrendLineChart = memo(
               }}
             >
               <View style={styles.tooltipBubble}>
-                <Text style={styles.tooltipDate}>{activeDot.date}</Text>
+                <Text style={styles.tooltipDate}>{activeDot.date}  {activeDot.total.toFixed(2)} 元</Text>
                 {breakdownByClass?.length ? (
                   <>
-                    <Text style={styles.tooltipAmountPrimary}>
-                      {primarySeriesLabel} {activeDot.total.toFixed(2)} 元
-                    </Text>
                     {(breakdownByClass ?? [])
+                      .filter((ser) => !hiddenClasses?.has(ser.assetClass))
                       .map((ser) => {
                         const pt = ser.points.find((p) => p.date === activeDot.date);
                         const v = pt?.total ?? 0;
@@ -474,9 +456,7 @@ export const TrendLineChart = memo(
                         </Text>
                       ))}
                   </>
-                ) : (
-                  <Text style={styles.tooltipAmount}>{activeDot.total.toFixed(2)} 元</Text>
-                )}
+                ) : null}
               </View>
               <View style={styles.tooltipCaret} />
             </View>
@@ -484,7 +464,7 @@ export const TrendLineChart = memo(
         </Animated.View>
       </View>
 
-      <Text style={styles.rangeHint}>{rangeLabel}</Text>
+      <Text style={[styles.rangeHint, chartTextColor ? { color: chartTextColor } : null]}>{rangeLabel}</Text>
     </View>
   );
 }, (prevProps, nextProps) => {
@@ -493,6 +473,8 @@ export const TrendLineChart = memo(
     prevProps.points === nextProps.points &&
     prevProps.breakdownByClass === nextProps.breakdownByClass &&
     prevProps.primarySeriesLabel === nextProps.primarySeriesLabel &&
-    prevProps.chartTooltipOpacity === nextProps.chartTooltipOpacity
+    prevProps.chartTooltipOpacity === nextProps.chartTooltipOpacity &&
+    prevProps.chartTextColor === nextProps.chartTextColor &&
+    prevProps.hiddenClasses === nextProps.hiddenClasses
   );
 });

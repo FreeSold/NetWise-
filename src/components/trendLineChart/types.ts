@@ -1,3 +1,4 @@
+import type { AssetClass } from "../../domain/types";
 import type { ReactNode } from "react";
 import type { TrendPoint, TrendSeriesBreakdown } from "../../storage/assetHistoryDb";
 
@@ -11,4 +12,8 @@ export type TrendLineChartProps = {
   chartTooltipOpacity?: number;
   /** 渲染在 container 内（浮窗与折线图同一层叠上下文）的标题行（含下拉框） */
   renderChartHeader?: () => ReactNode;
+  /** 图表辅助文字颜色（x/y 轴标签、范围提示），暗色模式传亮色 */
+  chartTextColor?: string;
+  /** 被隐藏的资产类（点击图例切换），对应折线不显示 */
+  hiddenClasses?: Set<AssetClass>;
 };

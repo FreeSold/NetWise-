@@ -40,8 +40,8 @@ export const chartStyles = StyleSheet.create({
   },
   xLabelText: {
     position: "absolute",
-    fontSize: 10,
-    color: "#4f76b3"
+    fontSize: 11,
+    color: "#94A3B8"
   },
   /** 仅轴线（竖线+底边），与绘图区分层 */
   chartAxisFrameLayer: {
@@ -62,8 +62,8 @@ export const chartStyles = StyleSheet.create({
   yTickLabelText: {
     position: "absolute",
     left: 0,
-    fontSize: 10,
-    color: "#4f76b3",
+    fontSize: 14,
+    color: "#CBD5E1",
     textAlign: "right"
   },
   panLayer: {
@@ -99,23 +99,14 @@ export const chartStyles = StyleSheet.create({
     elevation: 50,
     alignItems: "center"
   },
-  /** 相对原尺寸约 70% */
   tooltipBubble: {
     borderRadius: 7,
-    backgroundColor: "rgba(255,255,255,0.94)",
-    borderWidth: 1,
-    borderColor: "rgba(37,99,235,0.22)",
-    paddingHorizontal: 7,
-    paddingVertical: 4,
+    backgroundColor: "#1E293BCC",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     minWidth: 96,
-    alignItems: "center",
-    shadowColor: "#1e3a5f",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.16,
-    shadowRadius: 4,
-    elevation: 30
+    alignItems: "center"
   },
-  /** 指向下侧数据点的三角 */
   tooltipCaret: {
     marginTop: -1,
     width: 0,
@@ -126,31 +117,32 @@ export const chartStyles = StyleSheet.create({
     borderTopWidth: 6,
     borderLeftColor: "transparent",
     borderRightColor: "transparent",
-    borderTopColor: "rgba(255,255,255,0.94)"
+    borderTopColor: "#1E293BCC"
   },
   tooltipDate: {
-    color: "#64748b",
-    fontSize: 8,
-    lineHeight: 11,
-    marginBottom: 1
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+    lineHeight: 20,
+    marginBottom: 4
   },
   tooltipAmount: {
-    color: "#163d7a",
-    fontWeight: "700",
-    fontSize: 11,
-    lineHeight: 14
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 14,
+    lineHeight: 20
   },
   tooltipAmountPrimary: {
-    color: "#1d4ed8",
-    fontWeight: "700",
-    fontSize: 11,
-    lineHeight: 14
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 14,
+    lineHeight: 20
   },
   tooltipBreakdownLine: {
-    fontSize: 9,
-    lineHeight: 12,
-    fontWeight: "600",
-    marginTop: 1
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "500",
+    marginTop: 2
   },
   emptyWrap: {
     borderWidth: 1,
@@ -167,8 +159,8 @@ export const chartStyles = StyleSheet.create({
     alignSelf: "center",
     maxWidth: "96%",
     textAlign: "center",
-    color: "#64748b",
-    fontSize: 11,
+    color: "#94A3B8",
+    fontSize: 12,
     marginTop: 2,
     lineHeight: 16,
     zIndex: 0
