@@ -126,6 +126,16 @@ export default function App() {
   const [billDetailVisible, setBillDetailVisible] = useState(false);
   const [billFilter, setBillFilter] = useState<BillFilter>(defaultBillFilter);
   const [billFilterVisible, setBillFilterVisible] = useState(false);
+  const [settingsForBill, setSettingsForBill] = useState(false);
+  const [billDatePeriod, setBillDatePeriod] = useState<"year" | "month" | "day" | null>(null);
+  const applyDatePeriod = (period: "year" | "month" | "day") => {
+    const today = new Date();
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const start = period === "year" ? fmt(new Date(today.getFullYear()-1, today.getMonth(), today.getDate())) : period === "month" ? fmt(new Date(today.getTime() - 30*86400000)) : fmt(today);
+    const end = fmt(today);
+    if (billDatePeriod === period) { setBillDatePeriod(null); setBillFilter((prev) => ({ ...prev, dateRange: { start: "", end: "" } })); }
+    else { setBillDatePeriod(period); setBillFilter((prev) => ({ ...prev, dateRange: { start, end } })); }
+  };
   /** 每个折线卡片独立隐藏的资产类（key: trend-main / platform-xxx / cm-id），点击图例切换 */
   const [hiddenClassesByModule, setHiddenClassesByModule] = useState<Record<string, Set<AssetClass>>>({});
   const toggleHiddenClass = (moduleKey: string, ac: AssetClass) => {
@@ -211,19 +221,28 @@ export default function App() {
 
   // 资产页皮肤样式（true=暗色，false=明亮）
   const assetSkin = {
-    heroCardBg: assetDarkMode ? "#1e3a5f" : "#0b63c8",
-    heroHintColor: assetDarkMode ? "#93c5fd" : "#bfdbfe",
-    cardBg: assetDarkMode ? "#1e3a5f" : "rgba(255,255,255,0.86)",
-    cardBorder: assetDarkMode ? "rgba(255,255,255,0.1)" : "#e2e8f0",
-    cardTitleColor: assetDarkMode ? "white" : "#1e293b",
-    cardSubColor: assetDarkMode ? "#93c5fd" : "#334155",
-    textPrimary: assetDarkMode ? "white" : "#1e293b",
-    textSecondary: assetDarkMode ? "#94a3b8" : "#64748b",
-    textAccent: assetDarkMode ? "#34d399" : "#059669",
-    chartLineColor: assetDarkMode ? "#2563eb" : "#2563eb",
-    chartGridColor: assetDarkMode ? "rgba(255,255,255,0.1)" : "#f1f5f9",
-    chartTextColor: assetDarkMode ? "#93c5fd" : "#64748b",
-    cardBgOpaque: assetDarkMode ? "#1e3a5f" : "white",
+    heroCardBg:      assetDarkMode ? "#1e3a5f" : "#0b63c8",
+    heroHintColor:   assetDarkMode ? "#93c5fd" : "#bfdbfe",
+    cardBg:          assetDarkMode ? "#1e3a5f" : "rgba(255,255,255,0.86)",
+    cardBorder:      assetDarkMode ? "rgba(255,255,255,0.1)" : "#e2e8f0",
+    cardTitleColor:  assetDarkMode ? "white" : "#1e293b",
+    cardSubColor:    assetDarkMode ? "#93c5fd" : "#334155",
+    textPrimary:     assetDarkMode ? "white" : "#1e293b",
+    textSecondary:   assetDarkMode ? "#94a3b8" : "#64748b",
+    textAccent:      assetDarkMode ? "#34d399" : "#059669",
+    chartLineColor:  assetDarkMode ? "#2563eb" : "#2563eb",
+    chartGridColor:  assetDarkMode ? "rgba(255,255,255,0.1)" : "#f1f5f9",
+    chartTextColor:  assetDarkMode ? "#93c5fd" : "#64748b",
+    cardBgOpaque:    assetDarkMode ? "#1e3a5f" : "white",
+    // 控件颜色（暗色/亮色）
+    btnBg:           assetDarkMode ? "#0a1f36" : "#1e40af",
+    hintTextColor:   assetDarkMode ? "#93c5fd" : "#64748b",
+    ruleCellBg:      assetDarkMode ? "#0a1f36" : "#f4f8ff",
+    ruleCellBorder:  assetDarkMode ? "#0a1f36" : "#b7d4fb",
+    ruleCellText:    assetDarkMode ? "white" : "#163d7a",
+    tagHiddenBg:     assetDarkMode ? "#0a1f36" : "#eef5ff",
+    tagHiddenBorder: assetDarkMode ? "#0a1f36" : "#bfdbfe",
+    tagHiddenText:   assetDarkMode ? "white" : "#1d4ed8",
   };
   const cardBorderColor = assetDarkMode ? assetSkin.cardBorder : `rgba(226,232,240,${cardAlpha})`;
 
@@ -1921,18 +1940,18 @@ export default function App() {
         <View style={[styles.viewTabContainer, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
           <View style={styles.viewTabRow}>
             <Pressable
-              style={[styles.viewTabButton, mainView === "asset" ? styles.viewTabButtonActive : null]}
+              style={[styles.viewTabButton, mainView === "asset" ? { backgroundColor: assetSkin.heroCardBg } : null]}
               onPress={() => setMainView("asset")}
             >
-              <Text style={[styles.viewTabButtonText, mainView === "asset" ? styles.viewTabButtonTextActive : null]}>
+              <Text style={[styles.viewTabButtonText, mainView === "asset" ? styles.viewTabButtonTextActive : { color: assetSkin.textSecondary }]}>
                 资产
               </Text>
             </Pressable>
             <Pressable
-              style={[styles.viewTabButton, mainView === "bill" ? styles.viewTabButtonActive : null]}
+              style={[styles.viewTabButton, mainView === "bill" ? { backgroundColor: assetSkin.heroCardBg } : null]}
               onPress={() => setMainView("bill")}
             >
-              <Text style={[styles.viewTabButtonText, mainView === "bill" ? styles.viewTabButtonTextActive : null]}>
+              <Text style={[styles.viewTabButtonText, mainView === "bill" ? styles.viewTabButtonTextActive : { color: assetSkin.textSecondary }]}>
                 账单
               </Text>
             </Pressable>
@@ -1940,19 +1959,30 @@ export default function App() {
           {mainView === "bill" ? (
             <View style={styles.billTabSummary}>
               <View style={styles.billTabSummaryRow}>
-                <Text style={[styles.billTabSummaryHint, assetDarkMode && { color: "#93c5fd" }]}>账单汇总</Text>
-                <Pressable style={styles.filterButton} onPress={() => setBillFilterVisible(true)}>
-                  <Text style={styles.filterButtonText}>筛选</Text>
-                </Pressable>
+                <Text style={[styles.billTabSummaryHint, assetDarkMode && { color: assetSkin.hintTextColor }]}>账单汇总</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  {(["year","month","day"] as const).map((p) => {
+                    const active = billDatePeriod === p;
+                    const dp: Record<string,string> = { year: "年", month: "月", day: "日" };
+                    return (
+                      <Pressable key={p} onPress={() => applyDatePeriod(p)}>
+                        <Text style={{ fontSize: 13, fontWeight: active ? "700" : "400", color: active ? "#3b82f6" : assetSkin.hintTextColor }}>{dp[p]}</Text>
+                      </Pressable>
+                    );
+                  })}
+                  <Pressable style={[styles.settingsGearButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={() => { setSettingsForBill(true); setSettingsVisible(true); }}>
+                    <Text style={styles.settingsGearText}>⚙</Text>
+                  </Pressable>
+                </View>
               </View>
-              <Text style={styles.billTabSummaryTotal}>{billSummary.balance.toFixed(2)}</Text>
+              <Text style={[styles.billTabSummaryTotal, { color: assetSkin.hintTextColor }]}>{billSummary.balance.toFixed(2)}</Text>
               <View style={styles.billTabStatRow}>
                 <View style={styles.billTabStatItem}>
-                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>收入</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>收入</Text>
                   <Text style={[styles.billTabStatValue, { color: "#34d399" }]}>+{billSummary.totalIncome.toFixed(2)}</Text>
                 </View>
                 <View style={styles.billTabStatItem}>
-                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>支出</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>支出</Text>
                   <Text style={[styles.billTabStatValue, { color: "#f87171" }]}>-{billSummary.totalExpense.toFixed(2)}</Text>
                 </View>
               </View>
@@ -1960,39 +1990,39 @@ export default function App() {
           ) : (
             <View style={styles.billTabSummary}>
               <View style={styles.billTabSummaryRow}>
-                <Text style={[styles.billTabSummaryHint, assetDarkMode && { color: "#93c5fd" }]}>{labels.heroTotalHint}</Text>
+                <Text style={[styles.billTabSummaryHint, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.heroTotalHint}</Text>
                 <View style={styles.heroActions}>
-                  <Pressable style={[styles.manageButton, modulePressOpacityStyle()]} onPress={() => setManageVisible(true)}>
+                  <Pressable style={[styles.manageButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={() => setManageVisible(true)}>
                     <Text style={styles.manageButtonText}>{labels.importButton}</Text>
                   </Pressable>
-                  <Pressable style={[styles.settingsGearButton, modulePressOpacityStyle()]} onPress={() => setSettingsVisible(true)}>
+                  <Pressable style={[styles.settingsGearButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={() => { setSettingsForBill(false); setSettingsVisible(true); }}>
                     <Text style={styles.settingsGearText}>⚙</Text>
                   </Pressable>
                 </View>
               </View>
-              <Text style={styles.billTabSummaryTotal}>{formatDisplayAmount(dailySummary.total)}</Text>
+              <Text style={[styles.billTabSummaryTotal, { color: assetSkin.hintTextColor }]}>{formatDisplayAmount(dailySummary.total)}</Text>
               {dbInitError ? <Text style={styles.heroError}>{fmt.heroDbErrorLine(dbInitError)}</Text> : null}
               <View style={styles.billTabStatRow}>
                 <View style={styles.billTabStatItem}>
-                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatCash}</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.quickStatCash}</Text>
                   <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.cash }]}>{formatDisplayAmount(cashAmount)}</Text>
                 </View>
                 <View style={styles.billTabStatItem}>
-                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatFund}</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.quickStatFund}</Text>
                   <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.fund }]}>{formatDisplayAmount(fundAmount)}</Text>
                 </View>
                 <View style={styles.billTabStatItem}>
-                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatInsurance}</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.quickStatInsurance}</Text>
                   <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.insurance }]}>{formatDisplayAmount(insuranceAmount)}</Text>
                 </View>
               </View>
               <View style={styles.billTabStatRow}>
                 <View style={styles.billTabStatItem}>
-                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatStock}</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.quickStatStock}</Text>
                   <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.stock }]}>{formatDisplayAmount(stockAmount)}</Text>
                 </View>
                 <View style={styles.billTabStatItem}>
-                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: "#93c5fd" }]}>{labels.quickStatWealth}</Text>
+                  <Text style={[styles.billTabStatLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.quickStatWealth}</Text>
                   <Text style={[styles.billTabStatValue, { color: BREAKDOWN_LINE_COLORS.wealth_management }]}>{formatDisplayAmount(wealthManagementAmount)}</Text>
                 </View>
                 <View style={styles.billTabStatItem} />
@@ -2200,9 +2230,9 @@ export default function App() {
       {settingsVisible ? (
         <SafeAreaView style={[styles.pageOverlay, { paddingTop: 16 + androidTopInset }]}>
           <View style={styles.settingsHeader}>
-            <Text style={styles.settingsTitle}>{labels.settingsTitle}</Text>
+            <Text style={[styles.settingsTitle, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.settingsTitle}</Text>
             <Pressable onPress={() => setSettingsVisible(false)}>
-              <Text style={styles.settingsClose}>{common.done}</Text>
+              <Text style={[styles.settingsClose, assetDarkMode && { color: assetSkin.hintTextColor }]}>{common.done}</Text>
             </Pressable>
           </View>
           <ScrollView
@@ -2240,7 +2270,7 @@ export default function App() {
                   />
                 </View>
                 <View style={styles.opacityPercentCenter} pointerEvents="none">
-                  <Text style={styles.opacityTrackPercentText}>{cardOpacityPercent}%</Text>
+                  <Text style={[styles.opacityTrackPercentText, assetDarkMode && { color: "white" }]}>{cardOpacityPercent}%</Text>
                 </View>
               </View>
               {/* 皮肤切换按钮 */}
@@ -2257,29 +2287,29 @@ export default function App() {
               </Pressable>
             </View>
           </View>
-          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+          <View style={[styles.settingsCard, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>{labels.privacyTitle}</Text>
+              <Text style={[styles.settingsLabel, { color: assetSkin.cardTitleColor }]}>{labels.privacyTitle}</Text>
               {renderModuleInfoIcon(labels.privacyTitle, MODULE_HINT_TEXT.privacy, true)}
             </View>
             {biometricAvailable ? (
-              <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={handleToggleBiometric}>
+              <Pressable style={[styles.securityActionButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={handleToggleBiometric}>
                 <Text style={styles.securityActionButtonText}>{biometricEnabled ? labels.biometricToggleOff : labels.biometricToggleOn}</Text>
               </Pressable>
             ) : (
-              <Text style={styles.muted}>{labels.biometricUnavailable}</Text>
+              <Text style={[styles.muted, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.biometricUnavailable}</Text>
             )}
           </View>
-          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+          <View style={[styles.settingsCard, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>{labels.moduleDisplayTitle}</Text>
+              <Text style={[styles.settingsLabel, { color: assetSkin.cardTitleColor }]}>{labels.moduleDisplayTitle}</Text>
               {renderModuleInfoIcon(labels.moduleDisplayTitle, MODULE_HINT_TEXT.moduleDisplay, true)}
             </View>
             <View style={styles.tagArea}>
               {visiblePlatformModules.map((platform) => (
                 <Pressable
                   key={`visible-${platform}`}
-                  style={[styles.visibleTag, modulePressOpacityStyle()]}
+                  style={[styles.visibleTag, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]}
                   onPress={() => movePlatformModuleToHidden(platform)}
                 >
                   <Text style={styles.visibleTagText}>{PLATFORM_MODULE_LABEL[platform]}</Text>
@@ -2287,7 +2317,7 @@ export default function App() {
                 </Pressable>
               ))}
               {visibleCustomRecognitionModules.map((m) => (
-                <View key={`vis-cm-${m.id}`} style={styles.customModuleVisiblePill}>
+                <View key={`vis-cm-${m.id}`} style={[styles.customModuleVisiblePill, { backgroundColor: assetSkin.btnBg }]}>
                   <Pressable
                     style={[styles.customModuleVisiblePillBody, modulePressOpacityStyle()]}
                     onPress={() => openCustomModuleConfig(m)}
@@ -2317,20 +2347,20 @@ export default function App() {
                 </Pressable>
               ))}
               {hiddenCustomRecognitionModules.map((m) => (
-                <View key={`hid-cm-${m.id}`} style={styles.customModuleHiddenPill}>
+                <View key={`hid-cm-${m.id}`} style={[styles.customModuleHiddenPill, { backgroundColor: assetSkin.tagHiddenBg, borderColor: assetSkin.tagHiddenBorder }]}>
                   <Pressable
                     style={[styles.customModuleHiddenPillAction, modulePressOpacityStyle()]}
                     onPress={() => void moveCustomModuleToVisible(m.id)}
                     hitSlop={8}
                   >
-                    <Text style={styles.hiddenTagAction}>+</Text>
+                    <Text style={[styles.hiddenTagAction, { color: assetSkin.tagHiddenText }]}>+</Text>
                   </Pressable>
                   <View style={styles.customModulePillDividerLight} />
                   <Pressable
                     style={[styles.customModuleHiddenPillBody, modulePressOpacityStyle()]}
                     onPress={() => openCustomModuleConfig(m)}
                   >
-                    <Text style={[styles.hiddenTagText, styles.customModulePillLabel]} numberOfLines={1}>
+                    <Text style={[styles.hiddenTagText, styles.customModulePillLabel, { color: assetSkin.tagHiddenText }]} numberOfLines={1}>
                       {m.displayName}
                     </Text>
                   </Pressable>
@@ -2339,20 +2369,20 @@ export default function App() {
             </View>
           </View>
 
-          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+          <View style={[styles.settingsCard, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>{labels.newModuleTitle}</Text>
+              <Text style={[styles.settingsLabel, { color: assetSkin.cardTitleColor }]}>{labels.newModuleTitle}</Text>
               {renderModuleInfoIcon(labels.newModuleTitle, MODULE_HINT_TEXT.newCustomModule, true)}
             </View>
-            {customModuleNotice ? <Text style={styles.muted}>{customModuleNotice}</Text> : null}
-            <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={openCustomModuleWizard}>
+            {customModuleNotice ? <Text style={[styles.muted, assetDarkMode && { color: assetSkin.hintTextColor }]}>{customModuleNotice}</Text> : null}
+            <Pressable style={[styles.securityActionButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={openCustomModuleWizard}>
               <Text style={styles.securityActionButtonText}>{labels.openModuleWizard}</Text>
             </Pressable>
           </View>
 
-          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+          <View style={[styles.settingsCard, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
             <View style={styles.settingsLabelHintRow}>
-              <Text style={styles.settingsLabel}>{labels.ocrRulesTitle}</Text>
+              <Text style={[styles.settingsLabel, { color: assetSkin.cardTitleColor }]}>{labels.ocrRulesTitle}</Text>
               {renderModuleInfoIcon(labels.ocrRulesTitle, MODULE_HINT_TEXT.ocrRules, true)}
             </View>
             {customRuleNotice ? (
@@ -2361,21 +2391,21 @@ export default function App() {
             {ocrCustomRules.length ? (
               <View style={styles.settingsRuleListSection}>
                 <View style={styles.settingsSubLabelHintRow}>
-                  <Text style={styles.settingsSubLabel}>{labels.ocrRulesAddedCaption}</Text>
+                  <Text style={[styles.settingsSubLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.ocrRulesAddedCaption}</Text>
                   {renderModuleInfoIcon(labels.ocrRulesAddedCaption, MODULE_HINT_TEXT.ocrRulesList, true)}
                 </View>
                 <View style={[styles.assetTableHeaderRow, styles.ruleListColumnsGap]}>
                   <View style={styles.ruleColSource}>
-                    <Text style={styles.fieldCaption}>{labels.ruleColSource}</Text>
+                    <Text style={[styles.fieldCaption, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.ruleColSource}</Text>
                   </View>
                   <View style={styles.ruleColContent}>
-                    <Text style={styles.fieldCaption}>{labels.ruleColContent}</Text>
+                    <Text style={[styles.fieldCaption, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.ruleColContent}</Text>
                   </View>
                   <View style={styles.ruleColClass}>
-                    <Text style={styles.fieldCaption}>{labels.ruleColClass}</Text>
+                    <Text style={[styles.fieldCaption, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.ruleColClass}</Text>
                   </View>
                   <View style={styles.ruleColScope}>
-                    <Text style={styles.fieldCaption}>{labels.ruleColScope}</Text>
+                    <Text style={[styles.fieldCaption, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.ruleColScope}</Text>
                   </View>
                 </View>
                 {ocrCustomRules.map((rule) => (
@@ -2390,29 +2420,29 @@ export default function App() {
                   >
                     <View style={[styles.assetRow, styles.ruleListColumnsGap]}>
                       <View style={styles.ruleColSource}>
-                        <View style={styles.ruleListCellBox}>
-                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                        <View style={[styles.ruleListCellBox, { backgroundColor: assetSkin.ruleCellBg, borderColor: assetSkin.ruleCellBorder }]}>
+                          <Text style={[styles.ruleListCellText, { color: assetSkin.ruleCellText }]} numberOfLines={1} ellipsizeMode="tail">
                             {rule.sourceSnippet}
                           </Text>
                         </View>
                       </View>
                       <View style={styles.ruleColContent}>
-                        <View style={styles.ruleListCellBox}>
-                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                        <View style={[styles.ruleListCellBox, { backgroundColor: assetSkin.ruleCellBg, borderColor: assetSkin.ruleCellBorder }]}>
+                          <Text style={[styles.ruleListCellText, { color: assetSkin.ruleCellText }]} numberOfLines={1} ellipsizeMode="tail">
                             {rule.recognizedContent}
                           </Text>
                         </View>
                       </View>
                       <View style={styles.ruleColClass}>
-                        <View style={styles.ruleListCellBox}>
-                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                        <View style={[styles.ruleListCellBox, { backgroundColor: assetSkin.ruleCellBg, borderColor: assetSkin.ruleCellBorder }]}>
+                          <Text style={[styles.ruleListCellText, { color: assetSkin.ruleCellText }]} numberOfLines={1} ellipsizeMode="tail">
                             {ASSET_CLASS_LABEL[rule.assetClass]}
                           </Text>
                         </View>
                       </View>
                       <View style={styles.ruleColScope}>
-                        <View style={styles.ruleListCellBox}>
-                          <Text style={styles.ruleListCellText} numberOfLines={1} ellipsizeMode="tail">
+                        <View style={[styles.ruleListCellBox, { backgroundColor: assetSkin.ruleCellBg, borderColor: assetSkin.ruleCellBorder }]}>
+                          <Text style={[styles.ruleListCellText, { color: assetSkin.ruleCellText }]} numberOfLines={1} ellipsizeMode="tail">
                             {formatOcrRuleScopeLabel(rule.screenScope, customRecognitionModules)}
                           </Text>
                         </View>
@@ -2422,18 +2452,18 @@ export default function App() {
                 ))}
               </View>
             ) : (
-              <Text style={styles.muted}>{labels.noCustomRules}</Text>
+              <Text style={[styles.muted, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.noCustomRules}</Text>
             )}
-            <Pressable style={[styles.securityActionButton, modulePressOpacityStyle()]} onPress={openOcrRuleModalForCreate}>
+            <Pressable style={[styles.securityActionButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={openOcrRuleModalForCreate}>
               <Text style={styles.securityActionButtonText}>{labels.addRule}</Text>
             </Pressable>
           </View>
           {debugJsonDumpsVisible ? (
-            <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+            <View style={[styles.settingsCard, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
               <View style={styles.settingsLabelHintRow}>
-                <Text style={styles.settingsLabel}>{labels.snapshotsDebugTitle}</Text>
+                <Text style={[styles.settingsLabel, { color: assetSkin.cardTitleColor }]}>{labels.snapshotsDebugTitle}</Text>
               </View>
-              <Text style={styles.muted}>{labels.snapshotsDebugHint}</Text>
+              <Text style={[styles.muted, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.snapshotsDebugHint}</Text>
               <View style={styles.debugDumpToolbar}>
                 <Pressable
                   style={[styles.securityActionButton, modulePressOpacityStyle(), persistedSnapshotsDebugBusy && { opacity: 0.6 }]}
@@ -2448,17 +2478,17 @@ export default function App() {
               {renderDebugJsonScroll(persistedSnapshotsDebugText || labels.snapshotsDebugPlaceholder, "tall")}
             </View>
           ) : null}
-          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+          <View style={[styles.settingsCard, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
             <View style={styles.settingsDataCleanupRow}>
               <View style={styles.settingsDataCleanupTitleCluster}>
-                <Text style={styles.settingsLabel} numberOfLines={1} ellipsizeMode="tail">
+                <Text style={[styles.settingsLabel, { color: assetSkin.cardTitleColor }]} numberOfLines={1} ellipsizeMode="tail">
                   {labels.dataCleanupTitle}
                 </Text>
                 {renderModuleInfoIcon(labels.dataCleanupTitle, MODULE_HINT_TEXT.dataCleanup, true)}
               </View>
               <View style={styles.clearActionRowModal}>
                 <Pressable
-                  style={[styles.clearActionButtonBlue, modulePressOpacityStyle()]}
+                  style={[styles.clearActionButtonBlue, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]}
                   onPress={() => {
                     setClearMode("today");
                     setClearAllStep2(false);
@@ -2490,10 +2520,10 @@ export default function App() {
               </Pressable>
             </View>
           </View>
-          <View style={[styles.settingsCard, { backgroundColor: cardBackgroundColor }]}>
+          <View style={[styles.settingsCard, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor }]}>
             <View style={styles.settingsDataCleanupRow}>
               <View style={styles.settingsDataCleanupTitleCluster}>
-                <Text style={styles.settingsLabel} numberOfLines={1} ellipsizeMode="tail">
+                <Text style={[styles.settingsLabel, { color: assetSkin.cardTitleColor }]} numberOfLines={1} ellipsizeMode="tail">
                   {labels.seedTestDataTitle}
                 </Text>
                 {renderModuleInfoIcon(labels.seedTestDataTitle, MODULE_HINT_TEXT.seedTestData, true)}
@@ -2501,7 +2531,7 @@ export default function App() {
               <View style={styles.clearActionRowModal}>
                 <Pressable
                   style={[
-                    styles.clearActionButtonBlue,
+                    styles.clearActionButtonBlue, { backgroundColor: assetSkin.btnBg },
                     modulePressOpacityStyle(!dbReady || seedTestBusy ? 0.45 : 1)
                   ]}
                   disabled={!dbReady || seedTestBusy}
@@ -2523,7 +2553,7 @@ export default function App() {
                 </Pressable>
               </View>
             </View>
-            <Text style={styles.seedTestDebugToggleHint}>{labels.debugJsonToggleHint}</Text>
+            <Text style={[styles.seedTestDebugToggleHint, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.debugJsonToggleHint}</Text>
             <Pressable
               style={[styles.securityActionButton, modulePressOpacityStyle(), styles.seedTestDebugToggleButton]}
               onPress={() => setDebugJsonDumpsVisible((v) => !v)}
@@ -2538,24 +2568,24 @@ export default function App() {
       ) : null}
 
       {manageVisible ? (
-        <SafeAreaView style={[styles.pageOverlay, { paddingTop: 16 + androidTopInset }]}>
-          <View style={styles.settingsHeader}>
-            <Text style={styles.settingsTitle}>{labels.settingsDataTitle}</Text>
+        <SafeAreaView style={[styles.pageOverlay, { paddingHorizontal: 0, paddingTop: 16 + androidTopInset, paddingBottom: 16 }]}>
+          <View style={[styles.settingsHeader, { paddingHorizontal: 16 }]}>
+            <Text style={[styles.settingsTitle, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.settingsDataTitle}</Text>
             <Pressable onPress={() => setManageVisible(false)}>
-              <Text style={styles.settingsClose}>{common.done}</Text>
+              <Text style={[styles.settingsClose, assetDarkMode && { color: assetSkin.hintTextColor }]}>{common.done}</Text>
             </Pressable>
           </View>
-          <ScrollView nestedScrollEnabled contentContainerStyle={styles.manageContent}>
-            <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
+          <ScrollView nestedScrollEnabled contentContainerStyle={[styles.manageContent, { gap: 6 }]}>
+            <View style={[styles.card, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, marginHorizontal: 16, borderRadius: 10 }]}>
               <View style={styles.sectionHeaderRow}>
                 <View style={[styles.cardTitleHintRow, styles.cardTitleHintRowGrow]}>
-                  <Text style={styles.cardTitle}>{labels.cardScreenshotImport}</Text>
+                  <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]}>{labels.cardScreenshotImport}</Text>
                   {renderModuleInfoIcon(labels.cardScreenshotImport, MODULE_HINT_TEXT.screenshotImport, true)}
                 </View>
                 <View style={styles.sectionHeaderActions}>
                   {selectedImageUris.length ? (
-                    <Pressable style={[styles.retryButton, modulePressOpacityStyle()]} onPress={handleRetryRecognition}>
-                      <Text style={styles.retryButtonText}>{ocrLoading ? labels.recognizing : labels.retryRecognize}</Text>
+                    <Pressable style={[styles.retryButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={handleRetryRecognition}>
+                      <Text style={[styles.retryButtonText, { color: "white", fontWeight: "700" }]}>{ocrLoading ? labels.recognizing : labels.retryRecognize}</Text>
                     </Pressable>
                   ) : null}
                 </View>
@@ -2572,21 +2602,21 @@ export default function App() {
                   >
                     <Image source={{ uri }} style={styles.previewTileImage} />
                     <Pressable
-                      style={[styles.previewTileDelete, modulePressOpacityStyle()]}
+                      style={[styles.previewTileDelete, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]}
                       hitSlop={8}
                       onPress={() => handleDeleteImportedImage(uri)}
                     >
-                      <Text style={styles.previewTileDeleteText}>×</Text>
+                      <Text style={[styles.previewTileDeleteText, { color: "white", fontWeight: "700" }]}>×</Text>
                     </Pressable>
                   </Pressable>
                 ))}
                 {selectedImageUris.length < 6 ? (
-                  <Pressable style={[styles.previewTileAdd, modulePressOpacityStyle()]} onPress={() => setSourceModalVisible(true)}>
-                    <Text style={styles.previewTileHint}>{labels.importTileAdd}</Text>
+                  <Pressable style={[styles.previewTileAdd, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={() => setSourceModalVisible(true)}>
+                    <Text style={[styles.previewTileHint, { color: "white", fontWeight: "700" }]}>{labels.importTileAdd}</Text>
                   </Pressable>
                 ) : null}
               </View>
-              {selectedImageUris.length ? <Text style={styles.muted}>{labels.importCountHint(selectedImageUris.length)}</Text> : null}
+              {selectedImageUris.length ? <Text style={[styles.muted, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.importCountHint(selectedImageUris.length)}</Text> : null}
               {ocrError ? (
                 <View style={styles.errorBanner}>
                   <Text style={styles.errorBannerTitle}>{labels.importFailedTitle}</Text>
@@ -2596,38 +2626,38 @@ export default function App() {
               {dbInitError ? <Text style={styles.error}>{fmt.dbInitFailed(dbInitError)}</Text> : null}
             </View>
 
-            <View style={[styles.card, { backgroundColor: cardBackgroundColor }]}>
+            <View style={[styles.card, { backgroundColor: assetDarkMode ? assetSkin.cardBgOpaque : cardBackgroundColor, marginHorizontal: 0, borderRadius: 10 }]}>
               <View style={[styles.cardTitleHintRow, styles.cardTitleHintRowGrow]}>
-                <Text style={styles.cardTitle}>{labels.cardParseResult}</Text>
+                <Text style={[styles.cardTitle, { color: assetSkin.cardTitleColor }]}>{labels.cardParseResult}</Text>
                 {renderModuleInfoIcon(labels.cardParseResult, MODULE_HINT_TEXT.parseResult, true)}
               </View>
               {groupedEditableAssets.map((group) => (
                 <View style={styles.parseGroup} key={group.uri}>
                   <View style={styles.parseGroupHeader}>
-                    <Text style={styles.parseGroupTitle}>{fmt.parseGroupTitle(group.index)}</Text>
-                    <Text style={styles.parseGroupTotal}>
+                    <Text style={[styles.parseGroupTitle, { color: assetSkin.cardTitleColor }]}>{fmt.parseGroupTitle(group.index)}</Text>
+                    <Text style={[styles.parseGroupTotal, assetDarkMode && { color: assetSkin.hintTextColor }]}>
                       {labels.parsePageTotal}
                       {group.total.toFixed(2)}
                     </Text>
                   </View>
-                  <Text style={styles.line}>
+                  <Text style={[styles.line, assetDarkMode && { color: assetSkin.hintTextColor }]}>
                     {labels.parseScreenTypeCaption}
                     {group.meta?.parseResult.screenDisplayLabel ??
                       SCREEN_TYPE_LABEL[group.meta?.parseResult.screenType ?? "unknown"]}
                   </Text>
-                  <Pressable style={[styles.addRowButton, modulePressOpacityStyle()]} onPress={() => addManualAssetRow(group.uri)}>
-                    <Text style={styles.addRowButtonText}>{labels.addRowManual}</Text>
+                  <Pressable style={[styles.addRowButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={() => addManualAssetRow(group.uri)}>
+                    <Text style={[styles.addRowButtonText, { color: "white", fontWeight: "700" }]}>{labels.addRowManual}</Text>
                   </Pressable>
                   {group.assets.length ? (
                     <View style={styles.assetTableHeaderRow}>
                       <View style={styles.assetNameColumn}>
-                        <Text style={styles.fieldCaption}>{labels.fieldAmountName}</Text>
+                        <Text style={[styles.fieldCaption, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.fieldAmountName}</Text>
                       </View>
                       <View style={styles.assetAmountWrap}>
-                        <Text style={styles.fieldCaption}>{labels.fieldAmount}</Text>
+                        <Text style={[styles.fieldCaption, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.fieldAmount}</Text>
                       </View>
                       <View style={styles.classPickerColumn}>
-                        <Text style={styles.fieldCaption}>{labels.fieldClass}</Text>
+                        <Text style={[styles.fieldCaption, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.fieldClass}</Text>
                       </View>
                     </View>
                   ) : null}
@@ -2637,16 +2667,16 @@ export default function App() {
                         <View style={styles.assetNameColumn}>
                           <View style={styles.assetNameFieldWrap}>
                             <Pressable
-                              style={[styles.assetNameClearPress, modulePressOpacityStyle()]}
+                              style={[styles.assetNameClearPress, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]}
                               hitSlop={6}
                               onPress={() => confirmRemoveAssetRow(asset.localId)}
                             >
-                              <Text style={styles.assetNameClearText}>×</Text>
+                              <Text style={[styles.assetNameClearText, { color: "white", fontWeight: "700" }]}>×</Text>
                             </Pressable>
                             <TextInput
                               value={asset.name}
                               onChangeText={(value) => updateAssetName(asset.localId, value)}
-                              style={styles.assetNameInput}
+                              style={[styles.assetNameInput, { backgroundColor: assetSkin.btnBg, borderColor: assetSkin.btnBg, color: "white", fontWeight: "700" }]}
                               placeholder={placeholders.amountName}
                               placeholderTextColor="#94a3b8"
                             />
@@ -2657,7 +2687,7 @@ export default function App() {
                             value={asset.amountInput}
                             onChangeText={(value) => updateAssetAmount(asset.localId, value)}
                             onBlur={() => validateAssetAmount(asset.localId)}
-                            style={styles.assetAmountInput}
+                            style={[styles.assetAmountInput, { backgroundColor: assetSkin.btnBg, borderColor: assetSkin.btnBg, color: "white", fontWeight: "700" }]}
                             autoCorrect={false}
                             autoCapitalize="none"
                             placeholder={placeholders.amount}
@@ -2666,16 +2696,16 @@ export default function App() {
                           {asset.amountError ? <Text style={styles.assetAmountErrorText}>{asset.amountError}</Text> : null}
                         </View>
                         <View style={styles.classPickerColumn}>
-                          <View style={[styles.classPickerWrap, modulePressOpacityStyle()]}>
+                          <View style={[styles.classPickerWrap, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg, borderColor: assetSkin.btnBg }]}>
                             <View style={styles.classDisplayRow}>
                               <Text
-                                style={[styles.classLabelText, styles.parseClassPickerLabel]}
+                                style={[styles.classLabelText, styles.parseClassPickerLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}
                                 numberOfLines={1}
                                 ellipsizeMode="tail"
                               >
                                 {ASSET_CLASS_LABEL[asset.assetClass]}
                               </Text>
-                              <Text style={styles.classArrowText}>▼</Text>
+                              <Text style={[styles.classArrowText, assetDarkMode && { color: assetSkin.hintTextColor }]}>▼</Text>
                             </View>
                             <Picker
                               mode="dialog"
@@ -2699,20 +2729,20 @@ export default function App() {
                   ))}
                   {group.meta?.rawOcrText ? (
                     <View style={styles.ocrDebugWrap}>
-                      <Pressable style={[styles.addRowButton, modulePressOpacityStyle()]} onPress={() => toggleOcrText(group.uri)}>
-                        <Text style={styles.addRowButtonText}>
+                      <Pressable style={[styles.addRowButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg }]} onPress={() => toggleOcrText(group.uri)}>
+                        <Text style={[styles.addRowButtonText, { color: "white", fontWeight: "700" }]}>
                           {expandedOcrUris.includes(group.uri) ? labels.wizardOcrToggleExpand : labels.wizardOcrToggleCollapse}
                         </Text>
                       </Pressable>
                       {expandedOcrUris.includes(group.uri) ? (
                         <>
-                          <Text style={styles.ocrSourceHint}>{labels.ocrSourceHint}</Text>
+                          <Text style={[styles.ocrSourceHint, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.ocrSourceHint}</Text>
                           <ScrollView
                             nestedScrollEnabled
                             style={styles.ocrSelectableScroll}
                             keyboardShouldPersistTaps="handled"
                           >
-                            <Text selectable style={styles.ocrSelectableText}>
+                            <Text selectable style={[styles.ocrSelectableText, assetDarkMode && { color: assetSkin.hintTextColor }]}>
                               {group.meta.rawOcrText}
                             </Text>
                           </ScrollView>
@@ -2722,16 +2752,16 @@ export default function App() {
                   ) : null}
                 </View>
               ))}
-              <Pressable style={[styles.confirmButton, modulePressOpacityStyle()]} onPress={handleConfirmSnapshot}>
+              <Pressable style={[styles.confirmButton, modulePressOpacityStyle(), { backgroundColor: assetSkin.btnBg, width: "75%", alignSelf: "center" }]} onPress={handleConfirmSnapshot}>
                 <Text style={styles.confirmButtonText}>{saveLoading ? labels.savingRecord : labels.confirmSave}</Text>
               </Pressable>
               {debugJsonDumpsVisible ? (
                 <>
-                  <Text style={styles.debugDumpLabel}>{labels.debugPendingSaveTitle}</Text>
+                  <Text style={[styles.debugDumpLabel, assetDarkMode && { color: assetSkin.hintTextColor }]}>{labels.debugPendingSaveTitle}</Text>
                   {renderDebugJsonScroll(pendingSaveDebugText)}
                 </>
               ) : null}
-              {saveNotice ? <Text style={styles.muted}>{saveNotice}</Text> : null}
+              {saveNotice ? <Text style={[styles.muted, assetDarkMode && { color: assetSkin.hintTextColor }]}>{saveNotice}</Text> : null}
             </View>
           </ScrollView>
         </SafeAreaView>
