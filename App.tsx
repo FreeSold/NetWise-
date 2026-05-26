@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Crypto from "expo-crypto";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
+import * as SecureStore from "expo-secure-store";
 import * as ImagePicker from "expo-image-picker";
 import { Picker } from "@react-native-picker/picker";
 import { Alert, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StatusBar as NativeStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
@@ -147,7 +148,21 @@ export default function App() {
     });
   };
   /** 资产页皮肤模式，true=暗色，false=明亮 */
+  const DARK_MODE_KEY = "netwise.assetDarkMode";
   const [assetDarkMode, setAssetDarkMode] = useState(true);
+  useEffect(() => {
+    (async () => {
+      const stored = await SecureStore.getItemAsync(DARK_MODE_KEY);
+      if (stored === "false") setAssetDarkMode(false);
+    })();
+  }, []);
+  const toggleAssetDarkMode = () => {
+    setAssetDarkMode(prev => {
+      const next = !prev;
+      SecureStore.setItemAsync(DARK_MODE_KEY, next ? "true" : "false");
+      return next;
+    });
+  };
   /** 各折线卡片独立的展示类型，key：trend-main / platform-alipay / platform-cmb / platform-wechat / cm-模块id */
   const [trendFiltersByModule, setTrendFiltersByModule] = useState<Record<string, TrendFilter>>({});
   /** 当前展开「折线类型」下拉的卡片 key，null 表示全关 */
@@ -2276,7 +2291,7 @@ export default function App() {
               {/* 皮肤切换按钮 */}
               <Pressable
                 style={[styles.skinSwitchButton, modulePressOpacityStyle()]}
-                onPress={() => setAssetDarkMode(prev => !prev)}
+                onPress={toggleAssetDarkMode}
               >
                 <View style={styles.skinGradientBlock}>
                   <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#1e3a5f" : "#f8fafc" }]} />
@@ -2509,7 +2524,7 @@ export default function App() {
               {/* 皮肤切换按钮 */}
               <Pressable
                 style={[styles.skinSwitchButton, modulePressOpacityStyle()]}
-                onPress={() => setAssetDarkMode(prev => !prev)}
+                onPress={toggleAssetDarkMode}
               >
                 <View style={styles.skinGradientBlock}>
                   <View style={[styles.skinGradientQuarter, { backgroundColor: assetDarkMode ? "#1e3a5f" : "#f8fafc" }]} />
